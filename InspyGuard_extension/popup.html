@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inspy Security Extension</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            width: 350px;
+            min-height: 400px;
+        }
+        .log-entry {
+            font-size: 0.85rem;
+            padding: 0.5rem;
+            margin: 0.25rem 0;
+            border-radius: 0.25rem;
+        }
+        .log-normal {
+            background-color: #d1ecf1;
+            border-left: 3px solid #17a2b8;
+        }
+        .log-malicious {
+            background-color: #f8d7da;
+            border-left: 3px solid #dc3545;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .status-active {
+            background-color: #28a745;
+        }
+        .status-warning {
+            background-color: #ffc107;
+        }
+        .status-danger {
+            background-color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid p-3">
+        <div class="row mb-3">
+            <div class="col">
+                <h5 class="mb-1">
+                    <span class="status-indicator status-active" id="statusIndicator"></span>
+                    Inspy Security Extension
+                </h5>
+                <small class="text-muted">Protecting your browsing experience</small>
+            </div>
+        </div>
+
+        <div class="row mb-3">
+            <div class="col">
+                <button id="scanBtn" class="btn btn-primary w-100">
+                    <i class="bi bi-shield-check"></i> Scan Now
+                </button>
+            </div>
+        </div>
+
+        <div class="row mb-2">
+            <div class="col">
+                <h6 class="mb-2">Security Events</h6>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col">
+                <div id="logContainer" class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">
+                    <div class="text-center text-muted">
+                        <small>No security events yet</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row mt-3">
+            <div class="col">
+                <div class="d-flex justify-content-between align-items-center">
+                    <small class="text-muted">Events: <span id="eventCount">0</span></small>
+                    <button id="clearLogsBtn" class="btn btn-sm btn-outline-secondary">Clear</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="popup.js"></script>
+</body>
+</html>
+

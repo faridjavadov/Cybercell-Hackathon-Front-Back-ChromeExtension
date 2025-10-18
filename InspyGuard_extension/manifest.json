@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "Inspy Security Extension",
+  "version": "1.0.0",
+  "description": "Security extension for monitoring and blocking dangerous file uploads",
+  "permissions": [
+    "storage",
+    "tabs",
+    "webRequest",
+    "webRequestBlocking",
+    "webNavigation",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["utils/rules.js", "content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon16.png",
+      "128": "icon16.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon16.png",
+    "128": "icon16.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js", "verify.js", "utils/rules.js"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
