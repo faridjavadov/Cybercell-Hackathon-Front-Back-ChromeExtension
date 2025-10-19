@@ -68,7 +68,6 @@
 VT_API_KEY=your_virustotal_api_key
 GEMINI_API_KEY=your_gemini_api_key
 ABUSEIPDB_API_KEY=your_abuseipdb_api_key
-MALICIOUS_URL=https://malicious-test-site.com
 ```
 
 ### 📊 Performance
