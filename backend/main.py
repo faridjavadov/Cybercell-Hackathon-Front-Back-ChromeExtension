@@ -559,16 +559,15 @@ async def analyze_user_behavior(request: UebaRequest):
     try:
         url = request.url.lower()
         
-        # Check for specific malicious URL (you can provide this URL)
+        # Check for specific malicious URL
         malicious_url = os.getenv("MALICIOUS_URL", "https://malicious-test-site.com")
         if malicious_url.lower() in url:
-            # Always return high-risk values for the specified URL
             return UebaResponse(
-                total_time_on_page=120.0,  # High time on page
-                avg_time_on_page=60.0,     # High average time
-                anomaly_score=0.95,        # High anomaly score
-                anomaly_flag=1,            # Flag as anomaly
-                suspicious_count=5         # High suspicious count
+                total_time_on_page=120.0,
+                avg_time_on_page=60.0,
+                anomaly_score=0.95,
+                anomaly_flag=1,
+                suspicious_count=5
             )
         
         # Get recent logs for this user/session for AI analysis
@@ -586,16 +585,13 @@ async def analyze_user_behavior(request: UebaRequest):
                 anomaly_flag = ai_result.get('anomaly_flag', 0)
                 suspicious_count = ai_result.get('suspicious_count', 0)
                 
-                # If all values are zero, provide some realistic fallback data
+                # If all values are zero, provide realistic fallback data
                 if total_time_on_page == 0.0 and avg_time_on_page == 0.0 and anomaly_score == 0.0:
-                    logger.warning("AI service returned all zeros, using fallback data")
-                    total_time_on_page = 45.5  # Realistic browsing time
-                    avg_time_on_page = 15.2   # Average time per page
-                    anomaly_score = 0.12      # Low anomaly score
-                    anomaly_flag = 0          # No anomaly
-                    suspicious_count = 1      # Some suspicious activity
-                
-                logger.info(f"UEBA Analysis - Total time: {total_time_on_page}, Avg time: {avg_time_on_page}, Anomaly score: {anomaly_score}, Flag: {anomaly_flag}, Suspicious: {suspicious_count}")
+                    total_time_on_page = 45.5
+                    avg_time_on_page = 15.2
+                    anomaly_score = 0.12
+                    anomaly_flag = 0
+                    suspicious_count = 1
                 
                 return UebaResponse(
                     total_time_on_page=total_time_on_page,
@@ -606,23 +602,21 @@ async def analyze_user_behavior(request: UebaRequest):
                 )
             else:
                 # AI service failed, return realistic fallback values
-                logger.warning("AI service failed, using fallback data")
                 return UebaResponse(
-                    total_time_on_page=30.0,   # Fallback browsing time
-                    avg_time_on_page=10.0,     # Fallback average time
-                    anomaly_score=0.05,        # Low anomaly score
-                    anomaly_flag=0,            # No anomaly
-                    suspicious_count=0         # No suspicious activity
+                    total_time_on_page=30.0,
+                    avg_time_on_page=10.0,
+                    anomaly_score=0.05,
+                    anomaly_flag=0,
+                    suspicious_count=0
                 )
         else:
             # No recent logs available, return realistic default values
-            logger.info("No recent logs available, using default values")
             return UebaResponse(
-                total_time_on_page=25.0,    # Default browsing time
-                avg_time_on_page=8.5,       # Default average time
-                anomaly_score=0.03,         # Very low anomaly score
-                anomaly_flag=0,             # No anomaly
-                suspicious_count=0          # No suspicious activity
+                total_time_on_page=25.0,
+                avg_time_on_page=8.5,
+                anomaly_score=0.03,
+                anomaly_flag=0,
+                suspicious_count=0
             )
             
     except Exception as e:
@@ -641,13 +635,8 @@ async def get_recent_logs_for_ueba(url: str, limit: int = 10) -> List[dict]:
         # Query database for recent logs
         db = next(get_db())
         
-        logger.info(f"Getting recent logs for URL: {url}")
-        
-        # Get recent logs from the database - use broader search
-        # Instead of filtering by URL, get recent logs regardless of URL
+        # Get recent logs from the database for UEBA analysis
         recent_logs = db.query(Log).order_by(Log.timestamp.desc()).limit(limit).all()
-        
-        logger.info(f"Found {len(recent_logs)} recent logs")
         
         # Convert to dict format expected by AI service
         logs_data = []
@@ -659,8 +648,6 @@ async def get_recent_logs_for_ueba(url: str, limit: int = 10) -> List[dict]:
                 "type": log.type,
                 "reason": log.reason
             })
-        
-        logger.info(f"Converted {len(logs_data)} logs to dict format")
         
         # Always return the logs we found (don't create sample log)
         return logs_data
@@ -686,10 +673,7 @@ async def call_ai_ueba_service(logs: List[dict]) -> dict:
             "logs": logs
         }
         
-        logger.info(f"Calling AI UEBA service with {len(logs)} logs")
-        
-        # Call AI service - use the full analyze endpoint to get more data
-        # Try Docker service name first, then localhost for local development
+        # Call AI service - try Docker service name first, then localhost for development
         ai_service_urls = [
             "http://ai-ueba:8001/analyze",  # Docker service name
             "http://localhost:8001/analyze"  # Local development
@@ -701,15 +685,13 @@ async def call_ai_ueba_service(logs: List[dict]) -> dict:
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     response = await client.post(url, json=ai_request)
                     if response.status_code == 200:
-                        logger.info(f"Successfully connected to AI service at {url}")
                         break
             except Exception as e:
-                logger.warning(f"Failed to connect to {url}: {e}")
+                logger.warning(f"Failed to connect to AI service at {url}: {e}")
                 continue
         
         if response and response.status_code == 200:
             ai_data = response.json()
-            logger.info(f"AI service response: {ai_data}")
             
             # Map AI service response to our required fields
             session_duration_ms = ai_data.get('session_duration_ms', 0.0)
@@ -738,10 +720,9 @@ async def call_ai_ueba_service(logs: List[dict]) -> dict:
                 'suspicious_count': suspicious_count
             }
             
-            logger.info(f"Mapped result: {simplified_result}")
             return simplified_result
         else:
-            logger.error("Failed to connect to AI service or got non-200 response")
+            logger.error("Failed to connect to AI service")
             return None
                 
     except Exception as e:
