@@ -292,31 +292,31 @@
                     return;
                 }
                 
-                // Rate limit Gemini classification to avoid API abuse
-                const rateLimitKey = `paste_${window.location.hostname}`;
-                if (!SecurityRules.isRateLimited(rateLimitKey, 5, 300000)) { // 5 requests per 5 minutes
-                    // Check with Gemini classification (slower but more comprehensive)
-                    const geminiResult = await SecurityRules.classifyPasteWithGPT(text);
-                    if (geminiResult && !geminiResult.error && geminiResult.label === 'malicious') {
-                        e.preventDefault();
-                        showAlert(`🚫 Paste blocked: Content flagged as malicious (${geminiResult.reason})`, 'danger');
-                        logEvent('malicious', `paste_gemini: ${geminiResult.reason}`);
-                        
-                        try {
-                            await fetch('http://localhost:8000/api/logs', {
-                                method: 'POST',
-                                headers: {'Content-Type': 'application/json'},
-                                body: JSON.stringify(SecurityRules.createSecurityLog(
-                                    window.location.href, 
-                                    'malicious', 
-                                    `paste_gemini: ${geminiResult.reason}`
-                                ))
-                            });
-                        } catch (err) {
-                            console.warn('[Inspy] Failed to log Gemini classification:', err);
-                        }
-                        return;
+                // Enhanced local classification (no external API calls for security)
+                const localResult = SecurityRules.classifyPasteLocally(text);
+                if (localResult.label === 'malicious') {
+                    e.preventDefault();
+                    showAlert(`🚫 Paste blocked: ${localResult.reason}`, 'danger');
+                    logEvent('malicious', `paste_local: ${localResult.reason}`);
+                    
+                    try {
+                        await fetch('http://localhost:8000/api/logs', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(SecurityRules.createSecurityLog(
+                                window.location.href, 
+                                'malicious', 
+                                `paste_local: ${localResult.reason}`
+                            ))
+                        });
+                    } catch (err) {
+                        console.warn('[Inspy] Failed to log local classification:', err);
                     }
+                    return;
+                } else if (localResult.label === 'suspicious') {
+                    // Show warning but allow paste
+                    showAlert(`⚠️ Warning: ${localResult.reason}`, 'warning');
+                    logEvent('suspicious', `paste_local: ${localResult.reason}`);
                 }
                 
                 console.log('[Inspy] ✅ Paste content approved');
@@ -327,16 +327,242 @@
         });
     }
 
+    // Local URL detection for fallback when API is unavailable
+    function checkUrlLocally(url) {
+        try {
+            const urlObj = new URL(url);
+            const hostname = urlObj.hostname.toLowerCase();
+            const pathname = urlObj.pathname.toLowerCase();
+            
+            // Known malicious patterns
+            const maliciousPatterns = [
+                // Common malware domains
+                /malware/i,
+                /virus/i,
+                /trojan/i,
+                /phishing/i,
+                /scam/i,
+                /fake/i,
+                /malicious/i,
+                /suspicious/i,
+                
+                // Common malicious file extensions
+                /\.exe$/i,
+                /\.scr$/i,
+                /\.bat$/i,
+                /\.cmd$/i,
+                /\.pif$/i,
+                /\.com$/i,
+                /\.jar$/i,
+                
+                // Suspicious paths
+                /\/malware\//i,
+                /\/virus\//i,
+                /\/trojan\//i,
+                /\/phishing\//i,
+                /\/scam\//i,
+                /\/fake\//i,
+                
+                // Common malicious subdomains
+                /malware\./i,
+                /virus\./i,
+                /trojan\./i,
+                /phishing\./i,
+                /scam\./i,
+                /fake\./i,
+            ];
+            
+            // Check hostname and pathname against patterns
+            for (const pattern of maliciousPatterns) {
+                if (pattern.test(hostname) || pattern.test(pathname)) {
+                    return {
+                        malicious: true,
+                        reason: `Suspicious pattern detected: ${pattern.source}`
+                    };
+                }
+            }
+            
+            // Check for suspicious IP addresses (but allow private/localhost)
+            if (hostname === 'localhost' || hostname.startsWith('127.') || hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
+                return {
+                    malicious: false,
+                    reason: 'Local/private IP address'
+                };
+            }
+            
+            // Check for suspicious TLDs
+            const suspiciousTlds = ['.tk', '.ml', '.ga', '.cf', '.click', '.download'];
+            for (const tld of suspiciousTlds) {
+                if (hostname.endsWith(tld)) {
+                    return {
+                        malicious: true,
+                        reason: `Suspicious TLD detected: ${tld}`
+                    };
+                }
+            }
+            
+            return { malicious: false, reason: 'No suspicious patterns detected' };
+            
+        } catch (error) {
+            console.warn('Error in local URL detection:', error);
+            return { malicious: false, reason: 'URL parsing error' };
+        }
+    }
+
+    // Create blocking page HTML for content script
+    function createBlockingPageHtml(url, reason) {
+        return `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Inspy Security Extension - Site Blocked</title>
+                <style>
+                    body {
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+                        background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+                        margin: 0;
+                        padding: 0;
+                        display: flex;
+                        justify-content: center;
+                        align-items: center;
+                        min-height: 100vh;
+                    }
+                    .container {
+                        background: white;
+                        border-radius: 20px;
+                        padding: 40px;
+                        box-shadow: 0 20px 40px rgba(0,0,0,0.2);
+                        text-align: center;
+                        max-width: 600px;
+                        margin: 20px;
+                        border: 3px solid #dc3545;
+                    }
+                    .icon {
+                        font-size: 80px;
+                        margin-bottom: 20px;
+                    }
+                    h1 {
+                        color: #dc3545;
+                        margin-bottom: 10px;
+                        font-size: 32px;
+                        font-weight: bold;
+                    }
+                    .extension-name {
+                        color: #6c757d;
+                        font-size: 18px;
+                        margin-bottom: 20px;
+                        font-weight: 500;
+                    }
+                    .url {
+                        background: #f8f9fa;
+                        padding: 15px;
+                        border-radius: 10px;
+                        margin: 20px 0;
+                        word-break: break-all;
+                        font-family: monospace;
+                        color: #6c757d;
+                        border: 1px solid #dee2e6;
+                    }
+                    .reason {
+                        color: #dc3545;
+                        font-weight: bold;
+                        margin: 20px 0;
+                        padding: 10px;
+                        background: #f8d7da;
+                        border-radius: 8px;
+                        border: 1px solid #f5c6cb;
+                    }
+                    .warning-text {
+                        color: #721c24;
+                        margin: 20px 0;
+                        font-size: 16px;
+                        line-height: 1.5;
+                    }
+                    .buttons {
+                        margin-top: 30px;
+                    }
+                    .back-button {
+                        background: #007bff;
+                        color: white;
+                        border: none;
+                        padding: 12px 24px;
+                        border-radius: 8px;
+                        font-size: 16px;
+                        cursor: pointer;
+                        margin: 0 10px;
+                        transition: background 0.3s;
+                    }
+                    .back-button:hover {
+                        background: #0056b3;
+                    }
+                    .home-button {
+                        background: #28a745;
+                        color: white;
+                        border: none;
+                        padding: 12px 24px;
+                        border-radius: 8px;
+                        font-size: 16px;
+                        cursor: pointer;
+                        margin: 0 10px;
+                        transition: background 0.3s;
+                    }
+                    .home-button:hover {
+                        background: #1e7e34;
+                    }
+                    .footer {
+                        margin-top: 30px;
+                        color: #6c757d;
+                        font-size: 14px;
+                    }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <div class="icon">🚫</div>
+                    <h1>ACCESS BLOCKED</h1>
+                    <div class="extension-name">by Inspy Security Extension</div>
+                    <p class="warning-text">This website has been blocked by the Inspy Security Extension to protect you from potential threats.</p>
+                    <div class="url">${url}</div>
+                    <div class="reason">⚠️ ${reason}</div>
+                    <p class="warning-text">The site you're trying to visit has been flagged as potentially malicious by our security systems. This could include phishing attempts, malware distribution, or other security threats.</p>
+                    <div class="buttons">
+                        <button class="back-button" onclick="history.back()">← Go Back</button>
+                        <button class="home-button" onclick="window.location.href='https://www.google.com'">🏠 Go to Google</button>
+                    </div>
+                    <div class="footer">
+                        <p>If you believe this is a false positive, please contact your security administrator.</p>
+                        <p><strong>Inspy Security Extension v1.0.0</strong></p>
+                    </div>
+                </div>
+            </body>
+            </html>
+        `;
+    }
+
     // NEW: URL reputation checking
     function setupUrlReputationCheck() {
         // Check URL reputation on page load
         const currentUrl = window.location.href;
+        
+        console.log('[Inspy] Starting URL reputation check for:', currentUrl);
+        
+        // Skip local files and chrome:// URLs
+        if (currentUrl.startsWith('file://') || currentUrl.startsWith('chrome://') || currentUrl.startsWith('chrome-extension://')) {
+            console.log('[Inspy] Skipping URL reputation check for local/system URL:', currentUrl);
+            logEvent('normal', 'Page navigation');
+            return;
+        }
+        
         const rateLimitKey = `reputation_${new URL(currentUrl).hostname}`;
         
         if (!SecurityRules.isRateLimited(rateLimitKey, 3, 3600000)) { // 3 requests per hour per domain
+            console.log('[Inspy] Rate limit OK, calling reputation API...');
             SecurityRules.checkUrlReputation(currentUrl).then(result => {
+                console.log('[Inspy] Reputation API response:', result);
                 if (result && !result.error && result.malicious) {
-                    showAlert(`⚠️ Warning: This site has been flagged as potentially malicious (Score: ${result.score || 'unknown'})`, 'warning');
+                    console.log('[Inspy] 🚫 MALICIOUS SITE DETECTED - BLOCKING PAGE:', currentUrl, 'Score:', result.score);
+                    
+                    // Log the malicious detection
                     logEvent('malicious', `url_reputation: score ${result.score || 'unknown'}`);
                     
                     // Send detailed log to backend
@@ -348,20 +574,40 @@
                                 url: currentUrl,
                                 timestamp: new Date().toISOString(),
                                 type: 'malicious',
-                                reason: `url_reputation_warning: score ${result.score || 'unknown'}`
+                                reason: `url_reputation_blocked: score ${result.score || 'unknown'}`
                             })
                         });
                     } catch (err) {
-                        console.warn('[Inspy] Failed to log URL reputation warning:', err);
+                        console.warn('[Inspy] Failed to log URL reputation block:', err);
                     }
+                    
+                    // BLOCK THE PAGE - Redirect to blocking page
+                    const reason = `Malicious site detected (Score: ${result.score || 'unknown'})`;
+                    const blockingPageHtml = createBlockingPageHtml(currentUrl, reason);
+                    document.documentElement.innerHTML = blockingPageHtml;
+                    
                 } else {
                     // Log normal page load
                     logEvent('normal', 'Page navigation');
                 }
             }).catch(err => {
                 console.warn('[Inspy] URL reputation check failed:', err);
-                // Still log the page load even if reputation check fails
-                logEvent('normal', 'Page navigation');
+                console.log('[Inspy] API blocked, using local detection fallback');
+                
+                // Fallback to local detection when API is blocked
+                const localResult = checkUrlLocally(currentUrl);
+                if (localResult.malicious) {
+                    console.log('[Inspy] 🚫 LOCAL DETECTION: Malicious site detected:', currentUrl, localResult.reason);
+                    logEvent('malicious', `local_detection: ${localResult.reason}`);
+                    
+                    // Block the page with local detection
+                    const reason = `Local detection: ${localResult.reason}`;
+                    const blockingPageHtml = createBlockingPageHtml(currentUrl, reason);
+                    document.documentElement.innerHTML = blockingPageHtml;
+                } else {
+                    console.log('[Inspy] Local detection: Safe site');
+                    logEvent('normal', 'Page navigation');
+                }
             });
         } else {
             // Log normal page load if rate limited

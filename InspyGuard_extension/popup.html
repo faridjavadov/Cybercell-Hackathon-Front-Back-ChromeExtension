@@ -4,91 +4,373 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Inspy Security Extension</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
+        :root {
+            /* Light mode colors - matching frontend */
+            --background: #ffffff;
+            --foreground: #0a0a0a;
+            --card: #ffffff;
+            --card-foreground: #0a0a0a;
+            --popover: #ffffff;
+            --popover-foreground: #0a0a0a;
+            --primary: #0a0a0a;
+            --primary-foreground: #fafafa;
+            --secondary: #f4f4f5;
+            --secondary-foreground: #0a0a0a;
+            --muted: #f4f4f5;
+            --muted-foreground: #71717a;
+            --accent: #f4f4f5;
+            --accent-foreground: #0a0a0a;
+            --destructive: #ef4444;
+            --destructive-foreground: #fafafa;
+            --border: #e4e4e7;
+            --input: #e4e4e7;
+            --ring: #a1a1aa;
+            --success: #22c55e;
+            --success-foreground: #fafafa;
+            --warning: #f59e0b;
+            --warning-foreground: #0a0a0a;
+            --danger: #ef4444;
+            --danger-foreground: #fafafa;
+            --radius: 0.625rem;
+        }
+
+        .dark {
+            /* Dark mode colors - matching frontend */
+            --background: #1C1C1E;
+            --foreground: #FFFFFF;
+            --card: #2C2C2E;
+            --card-foreground: #FFFFFF;
+            --popover: #2C2C2E;
+            --popover-foreground: #FFFFFF;
+            --primary: #82AAFF;
+            --primary-foreground: #1C1C1E;
+            --secondary: #3A3A3C;
+            --secondary-foreground: #FFFFFF;
+            --muted: #3A3A3C;
+            --muted-foreground: #A1A1AA;
+            --accent: #64D2FF;
+            --accent-foreground: #1C1C1E;
+            --destructive: #F44336;
+            --destructive-foreground: #FFFFFF;
+            --border: #3A3A3C;
+            --input: #515155;
+            --ring: #82AAFF;
+            --success: #4CAF50;
+            --success-foreground: #FFFFFF;
+            --warning: #FFC107;
+            --warning-foreground: #1C1C1E;
+            --danger: #F44336;
+            --danger-foreground: #FFFFFF;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         body {
-            width: 350px;
-            min-height: 400px;
+            width: 380px;
+            min-height: 450px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: var(--background);
+            color: var(--foreground);
+            line-height: 1.5;
+            transition: background-color 0.2s, color 0.2s;
         }
-        .log-entry {
-            font-size: 0.85rem;
-            padding: 0.5rem;
-            margin: 0.25rem 0;
-            border-radius: 0.25rem;
+
+        .container {
+            padding: 1.5rem;
         }
-        .log-normal {
-            background-color: #d1ecf1;
-            border-left: 3px solid #17a2b8;
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.5rem;
         }
-        .log-malicious {
-            background-color: #f8d7da;
-            border-left: 3px solid #dc3545;
+
+        .title-section {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
         }
+
         .status-indicator {
-            width: 10px;
-            height: 10px;
+            width: 12px;
+            height: 12px;
             border-radius: 50%;
             display: inline-block;
-            margin-right: 8px;
+            position: relative;
         }
+
+        .status-indicator::after {
+            content: '';
+            position: absolute;
+            top: -2px;
+            left: -2px;
+            right: -2px;
+            bottom: -2px;
+            border-radius: 50%;
+            background: inherit;
+            opacity: 0.3;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.3; transform: scale(1); }
+            50% { opacity: 0.1; transform: scale(1.1); }
+        }
+
         .status-active {
-            background-color: #28a745;
+            background: var(--success);
         }
+
         .status-warning {
-            background-color: #ffc107;
+            background: var(--warning);
         }
+
         .status-danger {
-            background-color: #dc3545;
+            background: var(--danger);
+        }
+
+        .title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            color: var(--foreground);
+        }
+
+        .subtitle {
+            font-size: 0.875rem;
+            color: var(--muted-foreground);
+            margin-top: 0.25rem;
+        }
+
+        .theme-toggle {
+            background: var(--secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 0.5rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--secondary-foreground);
+        }
+
+        .theme-toggle:hover {
+            background: var(--accent);
+        }
+
+        .scan-button {
+            width: 100%;
+            background: var(--primary);
+            color: var(--primary-foreground);
+            border: none;
+            border-radius: var(--radius);
+            padding: 0.75rem 1rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+
+        .scan-button:hover:not(:disabled) {
+            opacity: 0.9;
+        }
+
+        .scan-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .section-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            color: var(--foreground);
+            margin-bottom: 0.75rem;
+        }
+
+        .log-container {
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 0.75rem;
+            max-height: 220px;
+            overflow-y: auto;
+            margin-bottom: 1rem;
+        }
+
+        .log-container::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .log-container::-webkit-scrollbar-track {
+            background: var(--muted);
+            border-radius: 2px;
+        }
+
+        .log-container::-webkit-scrollbar-thumb {
+            background: var(--muted-foreground);
+            border-radius: 2px;
+        }
+
+        .log-entry {
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            border-radius: calc(var(--radius) - 2px);
+            border-left: 3px solid;
+            font-size: 0.8rem;
+            transition: all 0.2s;
+        }
+
+        .log-entry:last-child {
+            margin-bottom: 0;
+        }
+
+        .log-normal {
+            background: var(--muted);
+            border-left-color: var(--success);
+        }
+
+        .log-malicious {
+            background: rgba(244, 67, 54, 0.1);
+            border-left-color: var(--danger);
+        }
+
+        .log-suspicious {
+            background: rgba(245, 158, 11, 0.1);
+            border-left-color: var(--warning);
+        }
+
+        .log-type {
+            font-weight: 600;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 0.25rem;
+        }
+
+        .log-normal .log-type {
+            color: var(--success);
+        }
+
+        .log-malicious .log-type {
+            color: var(--danger);
+        }
+
+        .log-suspicious .log-type {
+            color: var(--warning);
+        }
+
+        .log-time {
+            color: var(--muted-foreground);
+            font-size: 0.75rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .log-url {
+            color: var(--foreground);
+            font-size: 0.75rem;
+            word-break: break-all;
+            opacity: 0.8;
+        }
+
+        .log-reason {
+            color: var(--muted-foreground);
+            font-size: 0.75rem;
+            margin-top: 0.25rem;
+        }
+
+        .footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .event-count {
+            font-size: 0.75rem;
+            color: var(--muted-foreground);
+        }
+
+        .clear-button {
+            background: var(--secondary);
+            color: var(--secondary-foreground);
+            border: 1px solid var(--border);
+            border-radius: calc(var(--radius) - 2px);
+            padding: 0.375rem 0.75rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .clear-button:hover {
+            background: var(--accent);
+        }
+
+        .empty-state {
+            text-align: center;
+            color: var(--muted-foreground);
+            font-size: 0.875rem;
+            padding: 2rem 1rem;
+        }
+
+        .spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid transparent;
+            border-top: 2px solid currentColor;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
     </style>
 </head>
 <body>
-    <div class="container-fluid p-3">
-        <div class="row mb-3">
-            <div class="col">
-                <h5 class="mb-1">
-                    <span class="status-indicator status-active" id="statusIndicator"></span>
-                    Inspy Security Extension
-                </h5>
-                <small class="text-muted">Protecting your browsing experience</small>
-            </div>
-        </div>
-
-        <div class="row mb-3">
-            <div class="col">
-                <button id="scanBtn" class="btn btn-primary w-100">
-                    <i class="bi bi-shield-check"></i> Scan Now
-                </button>
-            </div>
-        </div>
-
-        <div class="row mb-2">
-            <div class="col">
-                <h6 class="mb-2">Security Events</h6>
-            </div>
-        </div>
-
-        <div class="row">
-            <div class="col">
-                <div id="logContainer" class="border rounded p-2" style="max-height: 200px; overflow-y: auto;">
-                    <div class="text-center text-muted">
-                        <small>No security events yet</small>
-                    </div>
+    <div class="container">
+        <div class="header">
+            <div class="title-section">
+                <span class="status-indicator status-active" id="statusIndicator"></span>
+                <div>
+                    <div class="title">Inspy Security</div>
+                    <div class="subtitle">Protecting your browsing experience</div>
                 </div>
             </div>
+            <button class="theme-toggle" id="themeToggle" title="Toggle dark mode">
+                <span id="themeIcon">🌙</span>
+            </button>
         </div>
 
-        <div class="row mt-3">
-            <div class="col">
-                <div class="d-flex justify-content-between align-items-center">
-                    <small class="text-muted">Events: <span id="eventCount">0</span></small>
-                    <button id="clearLogsBtn" class="btn btn-sm btn-outline-secondary">Clear</button>
-                </div>
+        <button id="scanBtn" class="scan-button">
+            <span id="scanIcon">🛡️</span>
+            <span id="scanText">Scan Current Page</span>
+        </button>
+
+        <div class="section-title">Security Events</div>
+
+        <div id="logContainer" class="log-container">
+            <div class="empty-state">
+                <div>🛡️</div>
+                <div style="margin-top: 0.5rem;">No security events yet</div>
+                <div style="font-size: 0.75rem; margin-top: 0.25rem;">Start browsing to see security monitoring</div>
             </div>
+        </div>
+
+        <div class="footer">
+            <div class="event-count">
+                Events: <span id="eventCount">0</span>
+            </div>
+            <button id="clearLogsBtn" class="clear-button">Clear</button>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="popup.js"></script>
 </body>
 </html>

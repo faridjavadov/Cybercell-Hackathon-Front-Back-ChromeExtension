@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import LogTable from "../components/LogTable";
 import StatsCard from "../components/StatsCard";
 import LogsPagination from "../components/LogsPagination";
@@ -11,6 +11,7 @@ import {
   DocumentArrowDownIcon,
 } from "@heroicons/react/24/outline";
 
+// Types
 interface Log {
   id: number;
   url: string;
@@ -26,19 +27,28 @@ interface Stats {
   recent_logs: number;
 }
 
-interface PaginatedLogs {
-  logs: Log[];
-  total: number;
+interface PaginationState {
   page: number;
   per_page: number;
+  total: number;
   total_pages: number;
   has_next: boolean;
   has_prev: boolean;
 }
 
-type ConnectionStatus = "connecting" | "connected" | "error";
+interface Filters {
+  log_type: string;
+  reason: string;
+  start_date: string;
+  end_date: string;
+}
+
+type ConnectionStatus = "connecting" | "connected" | "error" | "disconnected";
+
+const API_BASE_URL = "http://localhost:8000";
 
 const Dashboard: React.FC = () => {
+  // State
   const [logs, setLogs] = useState<Log[]>([]);
   const [stats, setStats] = useState<Stats>({
     total_logs: 0,
@@ -46,151 +56,231 @@ const Dashboard: React.FC = () => {
     normal_logs: 0,
     recent_logs: 0
   });
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
-  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  
-  // Pagination state
-  const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [totalItems, setTotalItems] = useState(0);
-  const [itemsPerPage] = useState(20);
-  const [hasNext, setHasNext] = useState(false);
-  const [hasPrev, setHasPrev] = useState(false);
-  
-  // Filter state
-  const [filters, setFilters] = useState({
+  const [pagination, setPagination] = useState<PaginationState>({
+    page: 1,
+    per_page: 20,
+    total: 0,
+    total_pages: 1,
+    has_next: false,
+    has_prev: false
+  });
+  const [filters, setFilters] = useState<Filters>({
     log_type: "all",
     reason: "all",
     start_date: "",
     end_date: ""
   });
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
+  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [statsUpdated, setStatsUpdated] = useState(false);
 
+  // Refs
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+
+  // Build SSE URL
+  const buildSSEUrl = useCallback((page: number, currentFilters: Filters): string => {
+    const params = new URLSearchParams({
+      page: page.toString(),
+      per_page: pagination.per_page.toString()
+    });
+
+    if (currentFilters.log_type !== "all") {
+      params.append("log_type", currentFilters.log_type);
+    }
+    if (currentFilters.reason !== "all") {
+      params.append("reason", currentFilters.reason);
+    }
+    if (currentFilters.start_date) {
+      params.append("start_date", currentFilters.start_date);
+    }
+    if (currentFilters.end_date) {
+      params.append("end_date", currentFilters.end_date);
+    }
+
+    return `${API_BASE_URL}/api/logs/stream?${params.toString()}`;
+  }, [pagination.per_page]);
+
+  // Connect to SSE
+  const connectSSE = useCallback(() => {
+    // Close existing connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+
+    // Clear any pending reconnection
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+
+    try {
+      setConnectionStatus("connecting");
+      const sseUrl = buildSSEUrl(pagination.page, filters);
+      console.log("🔌 Connecting to SSE:", sseUrl);
+
+      const eventSource = new EventSource(sseUrl);
+      eventSourceRef.current = eventSource;
+
+      eventSource.onopen = () => {
+        setConnectionStatus("connected");
+        reconnectAttemptsRef.current = 0;
+        console.log("✅ SSE connected");
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          switch (data.type) {
+            case 'heartbeat':
+              setLastUpdate(new Date());
+              break;
+              
+            case 'error':
+              console.error("SSE Error:", data.message);
+              setConnectionStatus("error");
+              break;
+              
+            case 'stats':
+              setStats({
+                total_logs: data.total_logs,
+                malicious_logs: data.malicious_logs,
+                normal_logs: data.normal_logs,
+                recent_logs: data.recent_logs
+              });
+              setLastUpdate(new Date());
+              
+              // Visual feedback
+              setStatsUpdated(true);
+              setTimeout(() => setStatsUpdated(false), 1000);
+              break;
+              
+            case 'logs':
+              setLogs(data.logs);
+              setPagination(prev => ({
+                ...prev,
+                page: data.pagination.page,
+                total: data.pagination.total,
+                total_pages: data.pagination.total_pages,
+                has_next: data.pagination.has_next,
+                has_prev: data.pagination.has_prev
+              }));
+              setLastUpdate(new Date());
+              
+              console.log(`📊 Page ${data.pagination.page}/${data.pagination.total_pages}: ${data.logs.length} logs`);
+              break;
+          }
+        } catch (error) {
+          console.error("Error parsing SSE data:", error);
+        }
+      };
+
+      eventSource.onerror = (error) => {
+        console.error("SSE Error:", error);
+        
+        if (eventSource.readyState === EventSource.CLOSED) {
+          setConnectionStatus("disconnected");
+        } else {
+          setConnectionStatus("error");
+        }
+
+        // Attempt reconnection
+        const maxAttempts = 5;
+        if (reconnectAttemptsRef.current < maxAttempts) {
+          reconnectAttemptsRef.current++;
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+          
+          console.log(`⟳ Reconnecting in ${delay/1000}s (attempt ${reconnectAttemptsRef.current}/${maxAttempts})`);
+          
+          reconnectTimeoutRef.current = window.setTimeout(() => {
+            connectSSE();
+          }, delay);
+        } else {
+          console.error("❌ Max reconnection attempts reached");
+          setConnectionStatus("error");
+        }
+      };
+
+    } catch (error) {
+      console.error("Failed to create SSE connection:", error);
+      setConnectionStatus("error");
+    }
+  }, [buildSSEUrl, pagination.page, filters]);
+
+  // Initialize SSE connection
   useEffect(() => {
-    // Fetch initial logs
-    fetchLogs();
-    fetchStats();
-
-    // Set up SSE connection for real-time updates
-    const eventSource = new EventSource("http://localhost:8000/api/logs/stream");
+    connectSSE();
     
-    eventSource.onopen = () => {
-      setConnectionStatus("connected");
-      console.log("SSE connection opened");
-    };
-
-    eventSource.onmessage = (event) => {
-      try {
-        const newLogs: Log[] = JSON.parse(event.data);
-        setLogs(newLogs);
-        setLastUpdate(new Date());
-        // Update stats when new logs arrive
-        fetchStats();
-      } catch (err) {
-        console.error("Error parsing logs:", err);
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
       }
     };
+  }, [connectSSE]);
 
-    eventSource.onerror = () => {
-      setConnectionStatus("error");
-      console.error("SSE connection error");
-    };
-
-    // Cleanup
-    return () => {
-      eventSource.close();
-    };
+  // Handle page change
+  const handlePageChange = useCallback((page: number) => {
+    console.log(`🔄 Changing to page ${page}`);
+    setPagination(prev => ({ ...prev, page }));
+    // SSE will automatically reconnect with new page
   }, []);
 
-  const fetchLogs = async (page: number = currentPage, currentFilters = filters): Promise<void> => {
-    try {
-      // Build query parameters
-      const params = new URLSearchParams({
-        page: page.toString(),
-        per_page: itemsPerPage.toString()
-      });
-      
-      // Add filters to query parameters
-      if (currentFilters.log_type && currentFilters.log_type !== "all") {
-        params.append("log_type", currentFilters.log_type);
-      }
-      if (currentFilters.reason && currentFilters.reason !== "all") {
-        params.append("reason", currentFilters.reason);
-      }
-      if (currentFilters.start_date) {
-        params.append("start_date", currentFilters.start_date);
-      }
-      if (currentFilters.end_date) {
-        params.append("end_date", currentFilters.end_date);
-      }
-      
-      const response = await fetch(`http://localhost:8000/api/logs?${params.toString()}`);
-      if (response.ok) {
-        const data: PaginatedLogs = await response.json();
-        setLogs(data.logs);
-        setTotalPages(data.total_pages);
-        setTotalItems(data.total);
-        setHasNext(data.has_next);
-        setHasPrev(data.has_prev);
-        setCurrentPage(data.page);
-        setLastUpdate(new Date());
-      }
-    } catch (error) {
-      console.error("Error fetching logs:", error);
-    }
-  };
-
-  const fetchStats = async (): Promise<void> => {
-    try {
-      const response = await fetch("http://localhost:8000/api/logs/stats");
-      if (response.ok) {
-        const data: Stats = await response.json();
-        setStats(data);
-      }
-    } catch (error) {
-      console.error("Error fetching stats:", error);
-    }
-  };
-
-  const handleRefresh = async (): Promise<void> => {
-    setIsRefreshing(true);
-    try {
-      await Promise.all([fetchLogs(currentPage), fetchStats()]);
-    } finally {
-      setTimeout(() => setIsRefreshing(false), 1000);
-    }
-  };
-
-  const handlePageChange = async (page: number): Promise<void> => {
-    await fetchLogs(page, filters);
-  };
-
-  const handleFiltersChange = (newFilters: typeof filters): void => {
+  // Handle filter change
+  const handleFiltersChange = useCallback((newFilters: Filters) => {
+    console.log("🔍 Filters changed:", newFilters);
     setFilters(newFilters);
-    setCurrentPage(1); // Reset to first page when filters change
-    fetchLogs(1, newFilters);
-  };
+    setPagination(prev => ({ ...prev, page: 1 })); // Reset to page 1
+    // SSE will automatically reconnect with new filters
+  }, []);
 
-  const handleClearFilters = (): void => {
-    const clearedFilters = {
+  // Handle clear filters
+  const handleClearFilters = useCallback(() => {
+    console.log("🧹 Clearing filters");
+    const clearedFilters: Filters = {
       log_type: "all",
       reason: "all",
       start_date: "",
       end_date: ""
     };
     setFilters(clearedFilters);
-    setCurrentPage(1);
-    fetchLogs(1, clearedFilters);
-  };
+    setPagination(prev => ({ ...prev, page: 1 }));
+    // SSE will automatically reconnect
+  }, []);
 
+  // Handle refresh
+  const handleRefresh = useCallback(() => {
+    console.log("🔄 Refreshing data");
+    setIsRefreshing(true);
+    connectSSE(); // Force reconnection
+    setTimeout(() => setIsRefreshing(false), 1000);
+  }, [connectSSE]);
+
+  // Get connection status variant
   const getConnectionStatusVariant = (): "default" | "destructive" | "success" | "warning" => {
     switch (connectionStatus) {
-      case "connected":
-        return "success";
+      case "connected": return "success";
       case "error":
-        return "destructive";
-      default:
-        return "warning";
+      case "disconnected": return "destructive";
+      case "connecting": return "warning";
+      default: return "default";
+    }
+  };
+
+  // Get connection status text
+  const getConnectionStatusText = (): string => {
+    switch (connectionStatus) {
+      case "connected": return "Live";
+      case "error": return "Error";
+      case "disconnected": return "Disconnected";
+      case "connecting": return "Connecting...";
+      default: return "Unknown";
     }
   };
 
@@ -209,10 +299,12 @@ const Dashboard: React.FC = () => {
               </p>
               <div className="flex items-center space-x-4 text-sm text-muted-foreground">
                 <span>Last updated: {lastUpdate.toLocaleTimeString()}</span>
-                <Badge variant={getConnectionStatusVariant()} className="animate-pulse">
+                <Badge 
+                  variant={getConnectionStatusVariant()} 
+                  className={connectionStatus === "connected" ? "animate-pulse" : ""}
+                >
                   <div className="w-2 h-2 bg-current rounded-full mr-2"></div>
-                  {connectionStatus === "connected" ? "Connected" : 
-                   connectionStatus === "error" ? "Connection Error" : "Connecting..."}
+                  {getConnectionStatusText()}
                 </Badge>
               </div>
             </div>
@@ -248,7 +340,7 @@ const Dashboard: React.FC = () => {
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <div className="transform transition-all duration-300 hover:scale-105">
+          <div className={`transform transition-all duration-300 hover:scale-105 ${statsUpdated ? 'ring-2 ring-blue-500' : ''}`}>
             <StatsCard
               title="Total Events"
               value={stats.total_logs}
@@ -256,7 +348,7 @@ const Dashboard: React.FC = () => {
               description="All security events"
             />
           </div>
-          <div className="transform transition-all duration-300 hover:scale-105">
+          <div className={`transform transition-all duration-300 hover:scale-105 ${statsUpdated ? 'ring-2 ring-red-500' : ''}`}>
             <StatsCard
               title="Threats Detected"
               value={stats.malicious_logs}
@@ -264,7 +356,7 @@ const Dashboard: React.FC = () => {
               description="Malicious activities"
             />
           </div>
-          <div className="transform transition-all duration-300 hover:scale-105">
+          <div className={`transform transition-all duration-300 hover:scale-105 ${statsUpdated ? 'ring-2 ring-green-500' : ''}`}>
             <StatsCard
               title="Safe Events"
               value={stats.normal_logs}
@@ -272,7 +364,7 @@ const Dashboard: React.FC = () => {
               description="Normal activities"
             />
           </div>
-          <div className="transform transition-all duration-300 hover:scale-105">
+          <div className={`transform transition-all duration-300 hover:scale-105 ${statsUpdated ? 'ring-2 ring-yellow-500' : ''}`}>
             <StatsCard
               title="Recent Activity"
               value={stats.recent_logs}
@@ -295,16 +387,16 @@ const Dashboard: React.FC = () => {
               <div className="flex items-center justify-between">
                 <div>
                   <CardTitle className="text-2xl font-bold tracking-tight flex items-center gap-3">
-                    <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></span>
+                    <span className={`w-2 h-2 rounded-full ${connectionStatus === 'connected' ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`}></span>
                     Security Events
                   </CardTitle>
                   <CardDescription className="text-base mt-2">
-                    Live monitoring of file uploads and security threats
+                    Live monitoring of file uploads and security threats (Page {pagination.page} of {pagination.total_pages})
                   </CardDescription>
                 </div>
                 <div className="flex items-center space-x-2">
                   <Badge variant="outline" className="text-xs">
-                    {totalItems} total events
+                    {pagination.total} total events
                   </Badge>
                   <Button 
                     onClick={handleRefresh} 
@@ -325,13 +417,13 @@ const Dashboard: React.FC = () => {
               <LogTable logs={logs} />
               <div className="px-6">
                 <LogsPagination
-                  currentPage={currentPage}
-                  totalPages={totalPages}
-                  hasNext={hasNext}
-                  hasPrev={hasPrev}
+                  currentPage={pagination.page}
+                  totalPages={pagination.total_pages}
+                  hasNext={pagination.has_next}
+                  hasPrev={pagination.has_prev}
                   onPageChange={handlePageChange}
-                  totalItems={totalItems}
-                  itemsPerPage={itemsPerPage}
+                  totalItems={pagination.total}
+                  itemsPerPage={pagination.per_page}
                 />
               </div>
             </CardContent>

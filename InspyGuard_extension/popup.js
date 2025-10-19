@@ -1,11 +1,16 @@
 document.addEventListener('DOMContentLoaded', function() {
     const scanBtn = document.getElementById('scanBtn');
+    const scanIcon = document.getElementById('scanIcon');
+    const scanText = document.getElementById('scanText');
     const logContainer = document.getElementById('logContainer');
     const eventCount = document.getElementById('eventCount');
     const clearLogsBtn = document.getElementById('clearLogsBtn');
     const statusIndicator = document.getElementById('statusIndicator');
+    const themeToggle = document.getElementById('themeToggle');
+    const themeIcon = document.getElementById('themeIcon');
 
     let securityLogs = [];
+    let isDarkMode = false;
 
     function updateStatusIndicator() {
         const maliciousCount = securityLogs.filter(log => log.type === 'malicious').length;
@@ -20,22 +25,38 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function displayLogs() {
         if (securityLogs.length === 0) {
-            logContainer.innerHTML = '<div class="text-center text-muted"><small>No security events yet</small></div>';
+            logContainer.innerHTML = `
+                <div class="empty-state">
+                    <div>🛡️</div>
+                    <div style="margin-top: 0.5rem;">No security events yet</div>
+                    <div style="font-size: 0.75rem; margin-top: 0.25rem;">Start browsing to see security monitoring</div>
+                </div>
+            `;
             return;
         }
 
         logContainer.innerHTML = '';
         securityLogs.slice(-10).reverse().forEach(log => {
             const logEntry = document.createElement('div');
-            logEntry.className = `log-entry ${log.type === 'malicious' ? 'log-malicious' : 'log-normal'}`;
+            
+            // Determine log class based on type
+            let logClass = 'log-normal';
+            if (log.type === 'malicious') {
+                logClass = 'log-malicious';
+            } else if (log.type === 'suspicious') {
+                logClass = 'log-suspicious';
+            }
+            
+            logEntry.className = `log-entry ${logClass}`;
             
             const timestamp = new Date(log.timestamp).toLocaleTimeString();
-            const reason = log.reason !== 'None' ? ` - ${log.reason}` : '';
+            const reason = log.reason !== 'None' ? log.reason : '';
             
             logEntry.innerHTML = `
-                <div class="fw-bold">${log.type.toUpperCase()}</div>
-                <div class="small">${timestamp}${reason}</div>
-                <div class="small text-truncate" title="${log.url}">${log.url}</div>
+                <div class="log-type">${log.type.toUpperCase()}</div>
+                <div class="log-time">${timestamp}</div>
+                <div class="log-url" title="${log.url}">${log.url}</div>
+                ${reason ? `<div class="log-reason">${reason}</div>` : ''}
             `;
             
             logContainer.appendChild(logEntry);
@@ -70,16 +91,39 @@ document.addEventListener('DOMContentLoaded', function() {
         updateStatusIndicator();
     }
 
+    // Dark mode functionality
+    function toggleTheme() {
+        isDarkMode = !isDarkMode;
+        document.documentElement.classList.toggle('dark', isDarkMode);
+        themeIcon.textContent = isDarkMode ? '☀️' : '🌙';
+        
+        // Save theme preference
+        chrome.storage.local.set({ isDarkMode: isDarkMode });
+    }
+
+    function loadTheme() {
+        chrome.storage.local.get(['isDarkMode'], function(result) {
+            isDarkMode = result.isDarkMode || false;
+            document.documentElement.classList.toggle('dark', isDarkMode);
+            themeIcon.textContent = isDarkMode ? '☀️' : '🌙';
+        });
+    }
+
+    // Theme toggle event listener
+    themeToggle.addEventListener('click', toggleTheme);
+
     scanBtn.addEventListener('click', function() {
         scanBtn.disabled = true;
-        scanBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Scanning...';
+        scanIcon.innerHTML = '<div class="spinner"></div>';
+        scanText.textContent = 'Scanning...';
         
         chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
             if (tabs[0]) {
                 chrome.tabs.sendMessage(tabs[0].id, {action: 'scanPage'}, function(response) {
                     setTimeout(() => {
                         scanBtn.disabled = false;
-                        scanBtn.innerHTML = '<i class="bi bi-shield-check"></i> Scan Now';
+                        scanIcon.textContent = '🛡️';
+                        scanText.textContent = 'Scan Current Page';
                         
                         if (response && response.success) {
                             const scanLog = {
@@ -110,6 +154,8 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    // Initialize
+    loadTheme();
     loadStoredLogs();
 });
 

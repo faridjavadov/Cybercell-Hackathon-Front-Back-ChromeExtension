@@ -152,19 +152,54 @@ const SecurityRules = {
         return suspicious;
     },
 
-    // --- NEW: paste content checks (regex heuristics + backend GPT) ---
+    // --- Enhanced paste content checks (local regex heuristics only) ---
     PASTE_REGEXES: {
+        // API Keys and Tokens
         API_KEY: /(?:api[_-]?key|token|secret|password)[\s:=]{0,3}[A-Za-z0-9\-\._]{16,}/i,
-        LONG_BASE64: /\b(?:[A-Za-z0-9+\/]{100,}={0,2})\b/,
-        SSN: /\b\d{3}-\d{2}-\d{4}\b/,
+        AWS_ACCESS_KEY: /AKIA[0-9A-Z]{16}/,
+        AWS_SECRET_KEY: /[A-Za-z0-9/+=]{40}/,
+        GITHUB_TOKEN: /ghp_[A-Za-z0-9]{36}/,
+        GITHUB_APP_TOKEN: /gho_[A-Za-z0-9]{36}/,
+        SLACK_TOKEN: /xox[baprs]-[A-Za-z0-9-]+/,
+        DISCORD_TOKEN: /[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}/,
+        STRIPE_KEY: /sk_live_[0-9a-zA-Z]{24}/,
+        TWILIO_TOKEN: /[0-9a-fA-F]{32}/,
+        
+        // Cryptographic Keys
+        PRIVATE_KEY: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----/,
+        PUBLIC_KEY: /-----BEGIN\s+(?:RSA\s+)?PUBLIC\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PUBLIC\s+KEY-----/,
         JWT: /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$/,
+        
+        // Personal Information
+        SSN: /\b\d{3}-\d{2}-\d{4}\b/,
         CREDIT_CARD: /\b(?:\d{4}[-\s]?){3}\d{4}\b/,
         EMAIL: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/,
         PHONE: /\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b/,
-        PRIVATE_KEY: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----/,
-        AWS_ACCESS_KEY: /AKIA[0-9A-Z]{16}/,
-        GITHUB_TOKEN: /ghp_[A-Za-z0-9]{36}/,
-        SLACK_TOKEN: /xox[baprs]-[A-Za-z0-9-]+/
+        
+        // Encoded Data
+        LONG_BASE64: /\b(?:[A-Za-z0-9+\/]{100,}={0,2})\b/,
+        HEX_ENCODED: /\b(?:[0-9a-fA-F]{2}){20,}\b/,
+        
+        // Database and Connection Strings
+        MONGODB_URI: /mongodb(?:\+srv)?:\/\/[^\s]+/,
+        POSTGRES_URI: /postgres(?:ql)?:\/\/[^\s]+/,
+        MYSQL_URI: /mysql:\/\/[^\s]+/,
+        REDIS_URI: /redis:\/\/[^\s]+/,
+        
+        // Cloud Service Keys
+        GOOGLE_API_KEY: /AIza[0-9A-Za-z\\-_]{35}/,
+        FIREBASE_KEY: /[A-Za-z0-9_-]{147}/,
+        AZURE_KEY: /[0-9a-fA-F]{32}/,
+        
+        // Malicious Patterns
+        SHELL_COMMANDS: /(?:rm\s+-rf|del\s+\/s|format\s+c:|shutdown|reboot|halt)/i,
+        SQL_INJECTION: /(?:union\s+select|drop\s+table|delete\s+from|insert\s+into).*?(?:--|#|\/\*)/i,
+        XSS_PATTERNS: /<script[^>]*>.*?<\/script>|<iframe[^>]*>.*?<\/iframe>|javascript:/i,
+        PATH_TRAVERSAL: /\.\.\/(?:\.\.\/)*[^\s]*/,
+        
+        // Suspicious URLs
+        SUSPICIOUS_URL: /(?:bit\.ly|tinyurl|t\.co|goo\.gl|ow\.ly)\/[A-Za-z0-9]+/,
+        IP_ADDRESS: /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/
     },
 
     checkPasteWithRegex(text) {
@@ -176,12 +211,109 @@ const SecurityRules = {
                     hits.push({
                         type: k, 
                         snippet: matches[0].slice(0, 50) + (matches[0].length > 50 ? '...' : ''),
-                        fullMatch: matches[0]
+                        fullMatch: matches[0],
+                        severity: this.getSeverityLevel(k)
                     });
                 }
             }
         }
         return hits;
+    },
+
+    // Classify severity levels for different types of sensitive data
+    getSeverityLevel(type) {
+        const severityMap = {
+            // Critical - Immediate block
+            'PRIVATE_KEY': 'critical',
+            'AWS_SECRET_KEY': 'critical',
+            'STRIPE_KEY': 'critical',
+            'SHELL_COMMANDS': 'critical',
+            'SQL_INJECTION': 'critical',
+            'XSS_PATTERNS': 'critical',
+            
+            // High - Block with warning
+            'API_KEY': 'high',
+            'AWS_ACCESS_KEY': 'high',
+            'GITHUB_TOKEN': 'high',
+            'GITHUB_APP_TOKEN': 'high',
+            'DISCORD_TOKEN': 'high',
+            'SLACK_TOKEN': 'high',
+            'GOOGLE_API_KEY': 'high',
+            'FIREBASE_KEY': 'high',
+            'AZURE_KEY': 'high',
+            'TWILIO_TOKEN': 'high',
+            'MONGODB_URI': 'high',
+            'POSTGRES_URI': 'high',
+            'MYSQL_URI': 'high',
+            'REDIS_URI': 'high',
+            'JWT': 'high',
+            
+            // Medium - Warn user
+            'SSN': 'medium',
+            'CREDIT_CARD': 'medium',
+            'LONG_BASE64': 'medium',
+            'HEX_ENCODED': 'medium',
+            'PATH_TRAVERSAL': 'medium',
+            'SUSPICIOUS_URL': 'medium',
+            'IP_ADDRESS': 'medium',
+            
+            // Low - Informational
+            'EMAIL': 'low',
+            'PHONE': 'low',
+            'PUBLIC_KEY': 'low'
+        };
+        
+        return severityMap[type] || 'medium';
+    },
+
+    // Enhanced local classification without external API calls
+    classifyPasteLocally(text) {
+        const regexHits = this.checkPasteWithRegex(text);
+        
+        if (regexHits.length === 0) {
+            return { label: 'benign', reason: 'No suspicious patterns detected', confidence: 0.8 };
+        }
+        
+        // Check for critical severity items
+        const criticalHits = regexHits.filter(hit => hit.severity === 'critical');
+        if (criticalHits.length > 0) {
+            return {
+                label: 'malicious',
+                reason: `Critical security risk detected: ${criticalHits.map(h => h.type).join(', ')}`,
+                confidence: 0.95,
+                details: criticalHits
+            };
+        }
+        
+        // Check for high severity items
+        const highHits = regexHits.filter(hit => hit.severity === 'high');
+        if (highHits.length > 0) {
+            return {
+                label: 'suspicious',
+                reason: `Sensitive data detected: ${highHits.map(h => h.type).join(', ')}`,
+                confidence: 0.85,
+                details: highHits
+            };
+        }
+        
+        // Check for medium severity items
+        const mediumHits = regexHits.filter(hit => hit.severity === 'medium');
+        if (mediumHits.length > 0) {
+            return {
+                label: 'suspicious',
+                reason: `Potentially sensitive content: ${mediumHits.map(h => h.type).join(', ')}`,
+                confidence: 0.7,
+                details: mediumHits
+            };
+        }
+        
+        // Low severity items
+        return {
+            label: 'benign',
+            reason: 'Minor sensitive patterns detected but likely safe',
+            confidence: 0.6,
+            details: regexHits
+        };
     },
 
     // Redact sensitive information before sending to backend
@@ -215,24 +347,12 @@ const SecurityRules = {
         return redacted;
     },
 
-    // Ask backend to consult Gemini (backend should handle Google Gemini API)
+    // SECURITY: Removed classifyPasteWithGPT to prevent data leakage
+    // This function was sending potentially sensitive data to external APIs
+    // Use enhanced local detection instead
     async classifyPasteWithGPT(text) {
-        try {
-            const redactedText = this.redactSensitive(text);
-            const backendUrl = 'http://localhost:8000/api/gpt/classify';
-            
-            const resp = await fetch(backendUrl, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ text: redactedText })
-            });
-            
-            if (!resp.ok) return { error: true };
-            return await resp.json(); // expect { label:'malicious'|'suspicious'|'benign', reason: '...' }
-        } catch (e) {
-            console.warn('[SecurityRules] Gemini classification failed:', e);
-            return { error: true };
-        }
+        console.warn('[SecurityRules] classifyPasteWithGPT is disabled for security reasons');
+        return { error: true, reason: 'Function disabled to prevent data leakage' };
     },
 
     // --- NEW: Enhanced security checks ---
