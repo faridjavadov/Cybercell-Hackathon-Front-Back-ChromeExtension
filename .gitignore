@@ -309,6 +309,58 @@ test_output/
 .prettierrc.local
 
 # ===========================================
+# AI/ML & UEBA Section
+# ===========================================
+# AI UEBA directory
+backend/ai_ueba/
+
+# Machine Learning models and data
+*.pkl
+*.pickle
+*.joblib
+*.h5
+*.hdf5
+*.model
+*.weights
+*.bin
+*.onnx
+*.tflite
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# AI/ML datasets
+*.csv
+*.json
+*.parquet
+*.feather
+*.arrow
+datasets/
+data/
+training_data/
+test_data/
+validation_data/
+
+# Jupyter Notebooks (optional - uncomment if needed)
+# *.ipynb
+# .ipynb_checkpoints/
+
+# AI/ML cache and temporary files
+.cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.coverage
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ===========================================
 # Project Specific
 # ===========================================
 # Extension reload instructions (temporary)

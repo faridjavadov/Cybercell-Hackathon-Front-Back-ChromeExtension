@@ -109,6 +109,92 @@ const LogTable: React.FC<LogTableProps> = ({ logs = [], logSource }) => {
     }
   };
 
+  // Extract HTTP method from command
+  const getHttpMethod = (command?: string): string | null => {
+    if (!command) return null;
+    const methodMatch = command.match(/-X\s+(\w+)/i);
+    return methodMatch ? methodMatch[1].toUpperCase() : null;
+  };
+
+  // Extract URL/endpoint from command
+  const getEndpoint = (command?: string): string | null => {
+    if (!command) return null;
+    const urlMatch = command.match(/https?:\/\/[^\s]+/);
+    return urlMatch ? urlMatch[0] : null;
+  };
+
+  // Extract port from command
+  const getPort = (command?: string): string | null => {
+    if (!command) return null;
+    const portMatch = command.match(/-p\s+(\d+(?:-\d+)?)/);
+    return portMatch ? portMatch[1] : null;
+  };
+
+  // Format command for display, using message as fallback
+  const formatCommand = (command?: string, message?: string): string => {
+    const text = command || message || '';
+    if (!text) return '-';
+    
+    // For curl commands, show method and endpoint
+    if (text.includes('curl')) {
+      const method = getHttpMethod(text);
+      const endpoint = getEndpoint(text);
+      if (method && endpoint) {
+        return `${method} ${endpoint}`;
+      } else if (endpoint) {
+        return `GET ${endpoint}`;
+      }
+    }
+    
+    // For nmap commands, show tool and target
+    if (text.includes('nmap')) {
+      const target = text.match(/\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/);
+      const port = getPort(text);
+      if (target) {
+        return port ? `nmap ${target[0]}:${port}` : `nmap ${target[0]}`;
+      }
+    }
+    
+    // For hydra commands, show tool and target
+    if (text.includes('hydra')) {
+      const target = text.match(/\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/);
+      if (target) {
+        return `hydra ${target[0]}`;
+      }
+    }
+    
+    // For gobuster commands, show tool and target
+    if (text.includes('gobuster')) {
+      const endpoint = getEndpoint(text);
+      if (endpoint) {
+        return `gobuster ${endpoint}`;
+      }
+    }
+    
+    // For HTTP request logs in message, extract method and endpoint
+    const httpInfo = parseHttpLog(text);
+    if (httpInfo.method && httpInfo.endpoint) {
+      return `${httpInfo.method} ${httpInfo.endpoint}`;
+    }
+    
+    // For other commands, show first part
+    const parts = text.split(' ');
+    return parts.length > 3 ? `${parts[0]} ${parts[1]}...` : text;
+  };
+
+  // Extract HTTP method and endpoint from HTTP request logs
+  const parseHttpLog = (message?: string): { method?: string; endpoint?: string } => {
+    if (!message) return {};
+    const httpMatch = message.match(/"(\w+)\s+([^\s]+)\s+HTTP\/1\.1"/);
+    if (httpMatch) {
+      return {
+        method: httpMatch[1],
+        endpoint: httpMatch[2]
+      };
+    }
+    return {};
+  };
+
   const isExtensionLog = (log: Log): log is ExtensionLog => {
     return 'url' in log && 'type' in log;
   };
@@ -138,8 +224,8 @@ const LogTable: React.FC<LogTableProps> = ({ logs = [], logSource }) => {
               ) : (
                 <>
                   <TableHead className="w-[120px]">Level</TableHead>
-                  <TableHead>Tool</TableHead>
-                  <TableHead className="w-[200px]">Target</TableHead>
+                  <TableHead>Command</TableHead>
+                  <TableHead className="w-[200px]">Target/Endpoint</TableHead>
                 </>
               )}
               <TableHead className="w-[180px]">Time</TableHead>
@@ -196,6 +282,19 @@ const LogTable: React.FC<LogTableProps> = ({ logs = [], logSource }) => {
                     </TableRow>
                   );
                 } else if (logSource === 'mcp' && isMcpLog(log)) {
+                  // Check if this is an HTTP request log (no command but has HTTP pattern in message)
+                  const httpInfo = parseHttpLog(log.message);
+                  const isHttpLog = !log.command && httpInfo.method;
+                  
+                  // Determine tool from command or message
+                  const toolText = log.command || log.message || '';
+                  const detectedTool = log.tool || 
+                    (toolText.includes('curl') ? 'curl' :
+                     toolText.includes('nmap') ? 'nmap' :
+                     toolText.includes('hydra') ? 'hydra' :
+                     toolText.includes('gobuster') ? 'gobuster' :
+                     toolText.includes('dirb') ? 'dirb' : null);
+                  
                   return (
                     <TableRow 
                       key={log.id} 
@@ -211,15 +310,38 @@ const LogTable: React.FC<LogTableProps> = ({ logs = [], logSource }) => {
                         </Badge>
                       </TableCell>
                       <TableCell className="max-w-[300px]">
-                        <div className="flex items-center gap-2 truncate">
-                          {getToolIcon(log.tool)}
-                          <span className="truncate">{log.tool || 'Unknown'}</span>
+                        <div className="flex items-center gap-2 truncate" title={log.command || log.message}>
+                          {isHttpLog ? (
+                            <CheckCircleIcon className="w-4 h-4 text-green-500" />
+                          ) : (
+                            getToolIcon(detectedTool)
+                          )}
+                          <span className="truncate font-mono text-sm">
+                            {formatCommand(log.command, log.message)}
+                          </span>
                         </div>
                       </TableCell>
                       <TableCell className="text-sm">
-                        <span className="text-foreground" title={log.target || 'No target'}>
-                          {log.target || '-'}
-                        </span>
+                        <div className="flex flex-col gap-1">
+                          {log.target && (
+                            <span className="text-foreground font-mono text-xs" title={log.target}>
+                              {log.target}
+                            </span>
+                          )}
+                          {getEndpoint(log.command || log.message) && (
+                            <span className="text-blue-600 dark:text-blue-400 font-mono text-xs" title={getEndpoint(log.command || log.message)}>
+                              {getEndpoint(log.command || log.message)}
+                            </span>
+                          )}
+                          {isHttpLog && httpInfo.endpoint && (
+                            <span className="text-green-600 dark:text-green-400 font-mono text-xs" title={httpInfo.endpoint}>
+                              {httpInfo.endpoint}
+                            </span>
+                          )}
+                          {!log.target && !getEndpoint(log.command || log.message) && !isHttpLog && (
+                            <span className="text-muted-foreground">-</span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         <div className="flex items-center gap-2">
