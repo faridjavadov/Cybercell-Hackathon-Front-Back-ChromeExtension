@@ -437,8 +437,9 @@ async def check_url_reputation(request: UrlReputationRequest):
                                     'ip': ip
                                 }
                                 
-                                # AbuseIPDB malicious if confidence > 25% OR reports > 5
-                                abuse_malicious = abuse_score > 25 or total_reports > 5
+                                # AbuseIPDB malicious if confidence > 50% AND reports > 10
+                                # OR if confidence is very high (> 75%) regardless of report count
+                                abuse_malicious = (abuse_score > 50 and total_reports > 10) or abuse_score > 75
                             else:
                                 reputation_data['sources']['abuseipdb'] = {'error': f'HTTP {response.status_code}'}
                 except Exception as e:
