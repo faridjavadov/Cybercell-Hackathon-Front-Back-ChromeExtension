@@ -314,7 +314,7 @@ const LogTable: React.FC<LogTableProps> = ({ logs = [], logSource }) => {
                           {isHttpLog ? (
                             <CheckCircleIcon className="w-4 h-4 text-green-500" />
                           ) : (
-                            getToolIcon(detectedTool)
+                            getToolIcon(detectedTool?? "")
                           )}
                           <span className="truncate font-mono text-sm">
                             {formatCommand(log.command, log.message)}
@@ -329,7 +329,7 @@ const LogTable: React.FC<LogTableProps> = ({ logs = [], logSource }) => {
                             </span>
                           )}
                           {getEndpoint(log.command || log.message) && (
-                            <span className="text-blue-600 dark:text-blue-400 font-mono text-xs" title={getEndpoint(log.command || log.message)}>
+                            <span className="text-blue-600 dark:text-blue-400 font-mono text-xs" title={getEndpoint(log.command || log.message) ?? ""}>
                               {getEndpoint(log.command || log.message)}
                             </span>
                           )}

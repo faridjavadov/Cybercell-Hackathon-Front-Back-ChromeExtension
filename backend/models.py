@@ -74,3 +74,10 @@ class PaginatedMcpLogs(BaseModel):
     has_next: bool
     has_prev: bool
 
+class UebaResponse(BaseModel):
+    total_time_on_page: Optional[float] = None
+    avg_time_on_page: Optional[float] = None
+    anomaly_score: Optional[float] = None
+    anomaly_flag: Optional[int] = None
+    suspicious_count: Optional[int] = None
+
