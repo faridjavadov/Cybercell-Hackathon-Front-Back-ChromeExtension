@@ -20,7 +20,7 @@ interface Log {
   id: number;
   url: string;
   timestamp: string;
-  type: 'malicious' | 'normal';
+  type: 'malicious' | 'normal' | 'suspicious';
   reason: string;
 }
 
@@ -35,6 +35,8 @@ const LogTable: React.FC<LogTableProps> = ({ logs }) => {
         return 'destructive';
       case 'normal':
         return 'success';
+      case 'suspicious':
+        return 'warning';
       default:
         return 'warning';
     }
@@ -46,6 +48,8 @@ const LogTable: React.FC<LogTableProps> = ({ logs }) => {
         return <ExclamationTriangleIcon className="w-4 h-4" />;
       case 'normal':
         return <CheckCircleIcon className="w-4 h-4" />;
+      case 'suspicious':
+        return <ExclamationTriangleIcon className="w-4 h-4" />;
       default:
         return <ClockIcon className="w-4 h-4" />;
     }
@@ -85,7 +89,12 @@ const LogTable: React.FC<LogTableProps> = ({ logs }) => {
               </TableRow>
             ) : (
               logs.map((log) => (
-                <TableRow key={log.id} className="hover:bg-muted/50">
+                <TableRow 
+                  key={log.id} 
+                  className={`hover:bg-muted/50 ${
+                    log.type === 'suspicious' ? 'bg-yellow-50 dark:bg-yellow-900/20' : ''
+                  }`}
+                >
                   <TableCell className="font-mono text-sm text-muted-foreground">
                     #{log.id}
                   </TableCell>

@@ -316,6 +316,20 @@
             const hostname = urlObj.hostname.toLowerCase();
             const pathname = urlObj.pathname.toLowerCase();
             
+            // Trusted domains that should never be flagged
+            const trustedDomains = [
+                'instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'linkedin.com',
+                'google.com', 'youtube.com', 'github.com', 'stackoverflow.com',
+                'amazon.com', 'netflix.com', 'spotify.com', 'discord.com',
+                'microsoft.com', 'apple.com', 'cloudflare.com', 'jsdelivr.net',
+                'tiktok.com', 'snapchat.com', 'pinterest.com', 'reddit.com'
+            ];
+            
+            // Skip local detection for trusted domains
+            if (trustedDomains.some(domain => hostname.includes(domain))) {
+                return { malicious: false, reason: 'Trusted domain' };
+            }
+            
             // Known malicious patterns
             const maliciousPatterns = [
                 /malware/i,
@@ -592,20 +606,18 @@
             try {
                 const suspiciousScripts = SecurityRules.scanDocumentForJsEvasion();
                 if (suspiciousScripts.length > 0) {
-                    console.warn('[Inspy] Suspicious JavaScript detected:', suspiciousScripts);
-                    
-                    // Log suspicious scripts but don't block (too aggressive)
+                    // Only log and warn for truly high-risk patterns
                     suspiciousScripts.forEach(script => {
                         logEvent('suspicious', `js_evasion: ${script.type} - ${script.reason}`);
                     });
                     
-                    // Show warning for high-risk patterns
-                    const highRiskScripts = suspiciousScripts.filter(s => 
-                        s.type === 'inline_script' && s.reason.includes('eval')
+                    // Show warning only for extremely suspicious patterns
+                    const extremeRiskScripts = suspiciousScripts.filter(s => 
+                        s.reason.includes('multiple eval calls') || s.reason.includes('extreme obfuscation')
                     );
                     
-                    if (highRiskScripts.length > 0) {
-                        showAlert(`⚠️ Warning: Suspicious JavaScript detected on this page`, 'warning');
+                    if (extremeRiskScripts.length > 0) {
+                        showAlert(`⚠️ High Security Risk: Malicious JavaScript detected on this page`, 'danger');
                     }
                 }
             } catch (err) {

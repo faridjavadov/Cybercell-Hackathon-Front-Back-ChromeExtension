@@ -27,9 +27,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (securityLogs.length === 0) {
             logContainer.innerHTML = `
                 <div class="empty-state">
-                    <div>🛡️</div>
-                    <div style="margin-top: 0.5rem;">No security events yet</div>
-                    <div style="font-size: 0.75rem; margin-top: 0.25rem;">Start browsing to see security monitoring</div>
+                    <div style="font-size: 1.5rem; margin-bottom: 0.5rem;">🛡️</div>
+                    <div>No security events detected</div>
+                    <div style="font-size: 0.625rem; margin-top: 0.25rem; opacity: 0.7;">Start browsing to see monitoring activity</div>
                 </div>
             `;
             return;
@@ -122,7 +122,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 chrome.tabs.sendMessage(tabs[0].id, {action: 'scanPage'}, function(response) {
                     setTimeout(() => {
                         scanBtn.disabled = false;
-                        scanIcon.textContent = '🛡️';
+                        scanIcon.textContent = '🔍';
                         scanText.textContent = 'Scan Current Page';
                         
                         if (response && response.success) {

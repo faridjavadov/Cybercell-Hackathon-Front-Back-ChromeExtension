@@ -78,35 +78,90 @@ const SecurityRules = {
     // --- NEW: JS exec / obfuscation scanner ---
     scanDocumentForJsEvasion() {
         const suspicious = [];
+        const currentDomain = window.location.hostname.toLowerCase();
         
-        // 1) find inline scripts
+        // Comprehensive whitelist of trusted domains that commonly use legitimate obfuscation
+        const trustedDomains = [
+            // Social Media & Communication
+            'instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'linkedin.com',
+            'tiktok.com', 'snapchat.com', 'pinterest.com', 'reddit.com', 'telegram.org',
+            'whatsapp.com', 'messenger.com', 'discord.com', 'slack.com', 'zoom.us',
+            
+            // Search & Tech Giants
+            'google.com', 'youtube.com', 'gmail.com', 'googleapis.com', 'googleusercontent.com',
+            'microsoft.com', 'bing.com', 'outlook.com', 'office.com', 'azure.com',
+            'apple.com', 'icloud.com', 'appstore.com', 'itunes.com',
+            
+            // E-commerce & Services
+            'amazon.com', 'amazonaws.com', 'ebay.com', 'paypal.com', 'stripe.com',
+            'shopify.com', 'etsy.com', 'alibaba.com', 'walmart.com', 'target.com',
+            
+            // Entertainment & Media
+            'netflix.com', 'spotify.com', 'youtube.com', 'twitch.tv', 'hulu.com',
+            'disney.com', 'hbo.com', 'paramount.com', 'peacock.com',
+            
+            // Development & Tech
+            'github.com', 'gitlab.com', 'stackoverflow.com', 'stackexchange.com',
+            'npmjs.com', 'jsdelivr.net', 'unpkg.com', 'cdnjs.cloudflare.com',
+            'codepen.io', 'jsfiddle.net', 'repl.it', 'codesandbox.io',
+            
+            // Cloud & CDN Services
+            'cloudflare.com', 'aws.amazon.com', 'cloud.google.com', 'azure.microsoft.com',
+            'fastly.com', 'keycdn.com', 'bunnycdn.com', 'jsdelivr.net',
+            
+            // News & Information
+            'cnn.com', 'bbc.com', 'nytimes.com', 'washingtonpost.com', 'reuters.com',
+            'bloomberg.com', 'forbes.com', 'techcrunch.com', 'wired.com',
+            
+            // Banking & Finance
+            'chase.com', 'bankofamerica.com', 'wellsfargo.com', 'citibank.com',
+            'paypal.com', 'venmo.com', 'cashapp.com', 'robinhood.com',
+            
+            // Education
+            'coursera.org', 'udemy.com', 'edx.org', 'khanacademy.org',
+            'mit.edu', 'stanford.edu', 'harvard.edu', 'yale.edu',
+            
+            // Government & Official
+            'gov.uk', 'usa.gov', 'irs.gov', 'ssa.gov', 'usps.com',
+            
+            // Additional Popular Sites
+            'wikipedia.org', 'imdb.com', 'booking.com', 'expedia.com',
+            'tripadvisor.com', 'yelp.com', 'craigslist.org', 'indeed.com',
+            'glassdoor.com', 'monster.com', 'ziprecruiter.com'
+        ];
+        
+        // Enhanced domain matching for subdomains and variations
+        const isTrustedDomain = (domain, trustedList) => {
+            // Direct match
+            if (trustedList.includes(domain)) return true;
+            
+            // Subdomain match (e.g., www.instagram.com, api.instagram.com)
+            if (trustedList.some(trusted => domain.endsWith('.' + trusted))) return true;
+            
+            // Parent domain match (e.g., instagram.com matches www.instagram.com)
+            if (trustedList.some(trusted => domain.includes(trusted))) return true;
+            
+            return false;
+        };
+        
+        // Skip scanning for trusted domains and their subdomains
+        if (isTrustedDomain(currentDomain, trustedDomains)) {
+            return suspicious;
+        }
+        
+        // Only scan for highly suspicious patterns on non-trusted domains
         for (const s of Array.from(document.querySelectorAll('script'))) {
             const code = s.textContent || '';
-            if (!code) continue;
+            if (!code || code.length < 50) continue; // Skip small scripts
             
-            // simple heuristics for suspicious patterns
-            if (/eval\s*\(|new\s+Function\s*\(|setTimeout\s*\(\s*['"`][^'"]{10,}['"`]\s*,/.test(code)) {
+            // Skip common legitimate obfuscated scripts
+            if (this.isLegitimateScript(code, s)) continue;
+            
+            // Only flag highly suspicious patterns
+            if (this.isHighlySuspiciousCode(code)) {
                 suspicious.push({
                     type: 'inline_script', 
-                    reason: 'eval/new Function/obfuscated string', 
-                    snippet: code.slice(0, 200)
-                });
-            }
-            
-            if (/\\x[0-9A-Fa-f]{2}/.test(code) || /atob\s*\(|fromCharCode/.test(code)) {
-                suspicious.push({
-                    type: 'obfuscation', 
-                    reason: 'hex escape or base64 usage', 
-                    snippet: code.slice(0, 200)
-                });
-            }
-            
-            // Check for heavily obfuscated code (high ratio of special chars)
-            const specialCharRatio = (code.match(/[^a-zA-Z0-9\s]/g) || []).length / code.length;
-            if (specialCharRatio > 0.3 && code.length > 100) {
-                suspicious.push({
-                    type: 'obfuscation',
-                    reason: 'high special character ratio',
+                    reason: this.getSuspiciousReason(code), 
                     snippet: code.slice(0, 200)
                 });
             }
@@ -150,6 +205,83 @@ const SecurityRules = {
         }
         
         return suspicious;
+    },
+    
+    isHighlySuspiciousCode(code) {
+        // Pattern 1: Multiple eval calls in sequence (highly suspicious)
+        const evalCount = (code.match(/eval\s*\(/g) || []).length;
+        if (evalCount >= 3) return true;
+        
+        // Pattern 2: Heavily obfuscated with multiple encoding layers
+        const encodingLayers = (code.match(/\\x[0-9A-Fa-f]{2}/g) || []).length;
+        const base64Patterns = (code.match(/atob\s*\(/g) || []).length;
+        if (encodingLayers >= 10 || base64Patterns >= 5) return true;
+        
+        // Pattern 3: Suspicious function construction patterns
+        if (/new\s+Function\s*\(\s*['"`][^'"]{50,}['"`]\s*\)/g.test(code)) return true;
+        
+        // Pattern 4: Extremely high obfuscation ratio (>60% special chars)
+        const specialCharRatio = (code.match(/[^a-zA-Z0-9\s]/g) || []).length / code.length;
+        if (specialCharRatio > 0.6 && code.length > 200) return true;
+        
+        // Pattern 5: Multiple setTimeout with obfuscated strings
+        const setTimeoutCount = (code.match(/setTimeout\s*\(\s*['"`][^'"]{20,}['"`]/g) || []).length;
+        if (setTimeoutCount >= 3) return true;
+        
+        return false;
+    },
+    
+    getSuspiciousReason(code) {
+        const evalCount = (code.match(/eval\s*\(/g) || []).length;
+        const encodingLayers = (code.match(/\\x[0-9A-Fa-f]{2}/g) || []).length;
+        const specialCharRatio = (code.match(/[^a-zA-Z0-9\s]/g) || []).length / code.length;
+        
+        if (evalCount >= 3) return `multiple eval calls (${evalCount})`;
+        if (encodingLayers >= 10) return `heavy encoding obfuscation`;
+        if (specialCharRatio > 0.6) return `extreme obfuscation (${Math.round(specialCharRatio * 100)}%)`;
+        
+        return 'suspicious obfuscation pattern';
+    },
+    
+    isLegitimateScript(code, scriptElement) {
+        // Check for common legitimate obfuscated scripts
+        
+        // Google Analytics / Google Tag Manager
+        if (code.includes('gtag') || code.includes('ga(') || code.includes('GoogleAnalytics')) return true;
+        if (code.includes('dataLayer') || code.includes('gtm')) return true;
+        
+        // Facebook Pixel
+        if (code.includes('fbq') || code.includes('FacebookPixel')) return true;
+        
+        // Common analytics and tracking
+        if (code.includes('mixpanel') || code.includes('amplitude') || code.includes('segment')) return true;
+        if (code.includes('hotjar') || code.includes('fullstory') || code.includes('logrocket')) return true;
+        
+        // Ad networks and monetization
+        if (code.includes('adsystem') || code.includes('doubleclick') || code.includes('googlesyndication')) return true;
+        if (code.includes('amazon-adsystem') || code.includes('adsbygoogle')) return true;
+        
+        // CDN and performance scripts
+        if (code.includes('cloudflare') || code.includes('jsdelivr') || code.includes('unpkg')) return true;
+        
+        // Common frameworks and libraries (often minified/obfuscated)
+        if (code.includes('jquery') || code.includes('react') || code.includes('angular') || code.includes('vue')) return true;
+        if (code.includes('bootstrap') || code.includes('lodash') || code.includes('moment')) return true;
+        
+        // Check script src for external trusted sources
+        if (scriptElement.src) {
+            const src = scriptElement.src.toLowerCase();
+            if (src.includes('googleapis.com') || src.includes('gstatic.com')) return true;
+            if (src.includes('cloudflare.com') || src.includes('jsdelivr.net')) return true;
+            if (src.includes('unpkg.com') || src.includes('cdnjs.cloudflare.com')) return true;
+            if (src.includes('facebook.net') || src.includes('instagram.com')) return true;
+        }
+        
+        // Check for common legitimate patterns that might look obfuscated
+        if (code.includes('webpackJsonp') || code.includes('__webpack_require__')) return true;
+        if (code.includes('define(') || code.includes('require(')) return true; // AMD/CommonJS modules
+        
+        return false;
     },
 
     // --- Enhanced paste content checks (local regex heuristics only) ---

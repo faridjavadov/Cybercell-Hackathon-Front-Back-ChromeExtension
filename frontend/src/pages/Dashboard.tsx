@@ -15,7 +15,7 @@ interface Log {
   id: number;
   url: string;
   timestamp: string;
-  type: 'malicious' | 'normal';
+  type: 'malicious' | 'normal' | 'suspicious';
   reason: string;
 }
 

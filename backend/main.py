@@ -286,16 +286,26 @@ async def check_url_reputation(request: UrlReputationRequest):
         parsed_url = urlparse(url)
         domain = parsed_url.netloc
         
-        # Skip localhost and local IPs - they're not malicious
+        # Skip localhost, local IPs, and trusted domains
+        trustedDomains = [
+            'instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'linkedin.com',
+            'google.com', 'youtube.com', 'github.com', 'stackoverflow.com',
+            'amazon.com', 'netflix.com', 'spotify.com', 'discord.com',
+            'microsoft.com', 'apple.com', 'cloudflare.com', 'jsdelivr.net',
+            'tiktok.com', 'snapchat.com', 'pinterest.com', 'reddit.com',
+            'telegram.org', 'whatsapp.com', 'messenger.com', 'slack.com'
+        ]
+        
         if (domain == 'localhost' or 
             domain.startswith('127.') or 
             domain.startswith('192.168.') or 
             domain.startswith('10.') or
-            domain.startswith('172.')):
+            domain.startswith('172.') or
+            any(trusted in domain.lower() for trusted in trustedDomains)):
             return UrlReputationResponse(
                 malicious=False, 
                 score=0, 
-                sources={'local': 'localhost or private IP'}, 
+                sources={'local': 'trusted domain or local IP'}, 
                 error=False
             )
         
@@ -404,12 +414,14 @@ async def check_url_reputation(request: UrlReputationRequest):
         
         # Local detection fallback (only if no API detection)
         if not reputation_data.get('malicious', False):
-            if not any(domain in url.lower() for domain in ['google.test', 'testing.google.test', 'malware.testing.google.test']):
-                malicious_patterns = ['malware', 'virus', 'trojan', 'phishing', 'scam', 'fake', 'malicious', 'suspicious']
-                if any(pattern in url.lower() for pattern in malicious_patterns):
-                    reputation_data['malicious'] = True
-                    reputation_data['score'] = 80
-                    reputation_data['sources']['local'] = 'Local pattern detection'
+            # Skip local detection for trusted domains
+            if not any(trusted in url.lower() for trusted in trustedDomains):
+                if not any(domain in url.lower() for domain in ['google.test', 'testing.google.test', 'malware.testing.google.test']):
+                    malicious_patterns = ['malware', 'virus', 'trojan', 'phishing', 'scam', 'fake', 'malicious', 'suspicious']
+                    if any(pattern in url.lower() for pattern in malicious_patterns):
+                        reputation_data['malicious'] = True
+                        reputation_data['score'] = 80
+                        reputation_data['sources']['local'] = 'Local pattern detection'
         
         return UrlReputationResponse(**reputation_data)
         
