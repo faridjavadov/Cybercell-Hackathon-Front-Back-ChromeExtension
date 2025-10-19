@@ -1,8 +1,16 @@
+// Import SecurityRules (make sure it's loaded before this script)
+// In manifest.json, ensure SecurityRules.js is listed before background.js
+
 const BACKEND_URL = 'http://localhost:8000/api/logs';
 const REPUTATION_URL = 'http://localhost:8000/api/reputation';
 
 let securityLogs = [];
-let urlCache = new Map(); // Cache for URL reputation results
+let urlCache = new Map();
+let fileBlockCache = new Map(); // Cache for file blocking results
+
+// ============================================
+// LOGGING FUNCTIONS
+// ============================================
 
 function sendLogToBackend(log) {
     fetch(BACKEND_URL, {
@@ -34,9 +42,20 @@ function storeLogLocally(log) {
 function processSecurityLog(log) {
     storeLogLocally(log);
     sendLogToBackend(log);
+    
+    // Notify popup if open
+    chrome.runtime.sendMessage({
+        action: 'updatePopup',
+        log: log
+    }).catch(() => {
+        // Popup not open, ignore error
+    });
 }
 
-// Check URL reputation with caching
+// ============================================
+// URL REPUTATION CHECKING
+// ============================================
+
 async function checkUrlReputation(url) {
     // Check cache first
     if (urlCache.has(url)) {
@@ -71,52 +90,20 @@ async function checkUrlReputation(url) {
     return { malicious: false, error: true };
 }
 
-// Local URL detection for fallback when API is unavailable
 function checkUrlLocally(url) {
     try {
         const urlObj = new URL(url);
         const hostname = urlObj.hostname.toLowerCase();
         const pathname = urlObj.pathname.toLowerCase();
         
-        // Known malicious patterns
         const maliciousPatterns = [
-            // Common malware domains
-            /malware/i,
-            /virus/i,
-            /trojan/i,
-            /phishing/i,
-            /scam/i,
-            /fake/i,
-            /malicious/i,
-            /suspicious/i,
-            
-            // Common malicious file extensions
-            /\.exe$/i,
-            /\.scr$/i,
-            /\.bat$/i,
-            /\.cmd$/i,
-            /\.pif$/i,
-            /\.com$/i,
-            /\.jar$/i,
-            
-            // Suspicious paths
-            /\/malware\//i,
-            /\/virus\//i,
-            /\/trojan\//i,
-            /\/phishing\//i,
-            /\/scam\//i,
-            /\/fake\//i,
-            
-            // Common malicious subdomains
-            /malware\./i,
-            /virus\./i,
-            /trojan\./i,
-            /phishing\./i,
-            /scam\./i,
-            /fake\./i,
+            /malware/i, /virus/i, /trojan/i, /phishing/i, /scam/i, /fake/i,
+            /malicious/i, /suspicious/i,
+            /\.exe$/i, /\.scr$/i, /\.bat$/i, /\.cmd$/i, /\.pif$/i, /\.com$/i, /\.jar$/i,
+            /\/malware\//i, /\/virus\//i, /\/trojan\//i, /\/phishing\//i, /\/scam\//i, /\/fake\//i,
+            /malware\./i, /virus\./i, /trojan\./i, /phishing\./i, /scam\./i, /fake\./i,
         ];
         
-        // Check hostname and pathname against patterns
         for (const pattern of maliciousPatterns) {
             if (pattern.test(hostname) || pattern.test(pathname)) {
                 return {
@@ -126,15 +113,14 @@ function checkUrlLocally(url) {
             }
         }
         
-        // Check for suspicious IP addresses (private/localhost)
-        if (hostname === 'localhost' || hostname.startsWith('127.') || hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
+        if (hostname === 'localhost' || hostname.startsWith('127.') || 
+            hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
             return {
                 malicious: false,
                 reason: 'Local/private IP address'
             };
         }
         
-        // Check for suspicious TLDs
         const suspiciousTlds = ['.tk', '.ml', '.ga', '.cf', '.click', '.download'];
         for (const tld of suspiciousTlds) {
             if (hostname.endsWith(tld)) {
@@ -153,13 +139,30 @@ function checkUrlLocally(url) {
     }
 }
 
-// Create blocking page HTML
-function createBlockingPageHtml(url, reason) {
+// ============================================
+// BLOCKING PAGE HTML
+// ============================================
+
+function createBlockingPageHtml(url, reason, blockType = 'url') {
+    const icons = {
+        url: '🚫',
+        file: '📁',
+        paste: '📋',
+        content: '⚠️'
+    };
+    
+    const titles = {
+        url: 'ACCESS BLOCKED',
+        file: 'FILE UPLOAD BLOCKED',
+        paste: 'PASTE BLOCKED',
+        content: 'CONTENT BLOCKED'
+    };
+    
     return `
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Inspy Security Extension - Site Blocked</title>
+            <title>Inspy Security Extension - ${titles[blockType]}</title>
             <style>
                 body {
                     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -262,13 +265,13 @@ function createBlockingPageHtml(url, reason) {
         </head>
         <body>
             <div class="container">
-                <div class="icon">🚫</div>
-                <h1>ACCESS BLOCKED</h1>
+                <div class="icon">${icons[blockType]}</div>
+                <h1>${titles[blockType]}</h1>
                 <div class="extension-name">by Inspy Security Extension</div>
-                <p class="warning-text">This website has been blocked by the Inspy Security Extension to protect you from potential threats.</p>
+                <p class="warning-text">This ${blockType === 'url' ? 'website' : 'action'} has been blocked by the Inspy Security Extension to protect you from potential threats.</p>
                 <div class="url">${url}</div>
                 <div class="reason">⚠️ ${reason}</div>
-                <p class="warning-text">The site you're trying to visit has been flagged as potentially malicious by our security systems. This could include phishing attempts, malware distribution, or other security threats.</p>
+                <p class="warning-text">The ${blockType === 'url' ? 'site' : 'content'} has been flagged as potentially malicious by our security systems. This could include phishing attempts, malware distribution, sensitive data leakage, or other security threats.</p>
                 <div class="buttons">
                     <button class="back-button" onclick="history.back()">← Go Back</button>
                     <button class="home-button" onclick="window.location.href='https://www.google.com'">🏠 Go to Google</button>
@@ -283,12 +286,53 @@ function createBlockingPageHtml(url, reason) {
     `;
 }
 
-// Show blocking page
-function showBlockingPage(tabId, url, reason) {
-    chrome.tabs.update(tabId, {
-        url: `data:text/html;charset=utf-8,${encodeURIComponent(createBlockingPageHtml(url, reason))}`
-    });
+// ============================================
+// FILE CONTENT SCANNING (using SecurityRules)
+// ============================================
+
+async function scanFileContent(fileData, fileName) {
+    try {
+        // Create a File object from the data
+        const blob = new Blob([fileData], { type: 'text/plain' });
+        const file = new File([blob], fileName, { type: 'text/plain' });
+        
+        // Use SecurityRules to scan (if available)
+        if (typeof SecurityRules !== 'undefined') {
+            const result = await SecurityRules.isFileDangerousWithContent(file);
+            return result;
+        }
+        
+        // Fallback if SecurityRules not available
+        return { dangerous: false, blocked: false, reason: 'SecurityRules not available' };
+        
+    } catch (error) {
+        console.error('Error scanning file content:', error);
+        return { dangerous: false, blocked: false, reason: 'Scan error', error: true };
+    }
 }
+
+// ============================================
+// PASTE CONTENT SCANNING (using SecurityRules)
+// ============================================
+
+function scanPasteContent(text) {
+    try {
+        if (typeof SecurityRules !== 'undefined') {
+            const result = SecurityRules.classifyPasteLocally(text);
+            return result;
+        }
+        
+        return { label: 'benign', blocked: false, reason: 'SecurityRules not available' };
+        
+    } catch (error) {
+        console.error('Error scanning paste content:', error);
+        return { label: 'benign', blocked: false, reason: 'Scan error', error: true };
+    }
+}
+
+// ============================================
+// MESSAGE HANDLERS
+// ============================================
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     switch (request.action) {
@@ -301,7 +345,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             chrome.runtime.sendMessage({
                 action: 'updatePopup',
                 log: request.log
-            });
+            }).catch(() => {});
             sendResponse({ success: true });
             break;
             
@@ -314,6 +358,53 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             chrome.storage.local.remove(['securityLogs']);
             sendResponse({ success: true });
             break;
+        
+        // NEW: File content scan request from content script
+        case 'scanFileContent':
+            (async () => {
+                const result = await scanFileContent(request.fileData, request.fileName);
+                
+                if (result.blocked) {
+                    // Log the blocked file
+                    const log = {
+                        url: sender.tab?.url || 'unknown',
+                        timestamp: new Date().toISOString(),
+                        type: 'file_blocked',
+                        reason: `File upload blocked: ${result.reason}`,
+                        fileName: request.fileName,
+                        details: result.details
+                    };
+                    processSecurityLog(log);
+                }
+                
+                sendResponse({ 
+                    success: true, 
+                    result: result 
+                });
+            })();
+            return true; // Keep channel open for async response
+            
+        // NEW: Paste content scan request from content script
+        case 'scanPasteContent':
+            const result = scanPasteContent(request.text);
+            
+            if (result.blocked) {
+                // Log the blocked paste
+                const log = {
+                    url: sender.tab?.url || 'unknown',
+                    timestamp: new Date().toISOString(),
+                    type: 'paste_blocked',
+                    reason: `Paste blocked: ${result.reason}`,
+                    details: result.details
+                };
+                processSecurityLog(log);
+            }
+            
+            sendResponse({ 
+                success: true, 
+                result: result 
+            });
+            break;
             
         default:
             sendResponse({ success: false, error: 'Unknown action' });
@@ -322,11 +413,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
 });
 
+// ============================================
+// INITIALIZATION
+// ============================================
+
 chrome.runtime.onInstalled.addListener(() => {
     chrome.storage.local.get(['securityLogs'], (result) => {
         securityLogs = result.securityLogs || [];
     });
+    
+    console.log('Inspy Security Extension installed and initialized');
 });
+
+// ============================================
+// TAB MONITORING
+// ============================================
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.status === 'complete' && tab.url) {
@@ -341,104 +442,62 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
 });
 
-// Store blocked URLs to prevent navigation
+// ============================================
+// URL BLOCKING (Manifest V3 - Content Script Based)
+// ============================================
+
 const blockedUrls = new Set();
 
-// Enhanced webRequest blocking for main frame requests
-chrome.webRequest.onBeforeRequest.addListener(
-    async (details) => {
-        // Only block main frame requests
-        if (details.type === 'main_frame') {
-            const url = details.url;
-            
-            // Skip chrome:// and extension URLs
-            if (url.startsWith('chrome://') || url.startsWith('chrome-extension://') || url.startsWith('moz-extension://')) {
-                return;
-            }
-            
-            
-            // Check URL reputation
-            const reputation = await checkUrlReputation(url);
-            
-            
-            if (reputation.malicious) {
-                // Block the navigation
-                const reason = `Malicious site detected (Score: ${reputation.score || 'unknown'})`;
-                
-                
-                // Add to blocked URLs set
-                blockedUrls.add(url);
-                
-                // Log the blocked attempt
-                const log = {
-                    url: url,
-                    timestamp: new Date().toISOString(),
-                    type: 'malicious',
-                    reason: `navigation_blocked: ${reason}`
-                };
-                processSecurityLog(log);
-                
-                // Redirect to blocking page
-                return {
-                    redirectUrl: `data:text/html;charset=utf-8,${encodeURIComponent(createBlockingPageHtml(url, reason))}`
-                };
-                
-            } else if (reputation.error) {
-                // If reputation check failed, use local fallback detection
-                const localResult = checkUrlLocally(url);
-                
-                if (localResult.malicious) {
-                    const reason = `Local detection: ${localResult.reason}`;
-                    
-                    blockedUrls.add(url);
-                    const log = {
-                        url: url,
-                        timestamp: new Date().toISOString(),
-                        type: 'malicious',
-                        reason: `local_detection: ${localResult.reason}`
-                    };
-                    processSecurityLog(log);
-                    
-                    return {
-                        redirectUrl: `data:text/html;charset=utf-8,${encodeURIComponent(createBlockingPageHtml(url, reason))}`
-                    };
-                }
-            }
-            
-            // Log normal navigation
-            const log = {
-                url: url,
-                timestamp: new Date().toISOString(),
-                type: 'normal',
-                reason: 'Navigation request'
-            };
-            processSecurityLog(log);
-        }
-    },
-    { urls: ['<all_urls>'] },
-    ['blocking']
-);
-
-// Fallback: Use onBeforeNavigate for additional blocking control
+// In Manifest V3, we use webNavigation to detect navigation and let content script handle blocking
 chrome.webNavigation.onBeforeNavigate.addListener(
     async (details) => {
-        if (details.frameId === 0) { // Main frame only
+        if (details.frameId === 0) {
             const url = details.url;
             
-            // Skip chrome:// and extension URLs
-            if (url.startsWith('chrome://') || url.startsWith('chrome-extension://') || url.startsWith('moz-extension://')) {
+            // Skip internal URLs
+            if (url.startsWith('chrome://') || 
+                url.startsWith('chrome-extension://') || 
+                url.startsWith('moz-extension://') ||
+                url.startsWith('data:')) {
                 return;
             }
             
-            // If URL is in blocked set, redirect to blocking page
-            if (blockedUrls.has(url)) {
-                
-                // Redirect to blocking page
-                chrome.tabs.update(details.tabId, {
-                    url: `data:text/html;charset=utf-8,${encodeURIComponent(createBlockingPageHtml(url, 'Site blocked by Inspy Security Extension'))}`
+            // Send message to content script to check and potentially block the URL
+            try {
+                await chrome.tabs.sendMessage(details.tabId, {
+                    action: 'checkUrlAndBlock',
+                    url: url
                 });
+            } catch (error) {
+                // Content script not ready yet, will be handled when it loads
+                console.log('Content script not ready for URL check:', url);
             }
         }
     },
     { url: [{ schemes: ['http', 'https'] }] }
 );
+
+// ============================================
+// PERIODIC CLEANUP
+// ============================================
+
+// Clean up old cache entries every 10 minutes
+setInterval(() => {
+    const now = Date.now();
+    
+    // Clean URL cache
+    for (const [url, data] of urlCache.entries()) {
+        if (now - data.timestamp > 300000) { // 5 minutes
+            urlCache.delete(url);
+        }
+    }
+    
+    // Clean file block cache
+    for (const [key, data] of fileBlockCache.entries()) {
+        if (now - data.timestamp > 600000) { // 10 minutes
+            fileBlockCache.delete(key);
+        }
+    }
+    
+    console.log('Cache cleanup completed');
+}, 600000); // Run every 10 minutes

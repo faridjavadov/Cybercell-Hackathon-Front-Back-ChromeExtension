@@ -29,6 +29,116 @@ const SecurityRules = {
         }
         return 'None';
     },
+
+    // --- DLP File Content Scanning ---
+    async scanFileContent(file) {
+        try {
+            // Only scan text-based files for sensitive content
+            const textFileTypes = [
+                'text/', 'application/json', 'application/xml', 'application/javascript',
+                'application/x-javascript', 'application/x-sh', 'application/x-bash',
+                'text/javascript', 'text/xml', 'text/csv', 'text/plain',
+                'application/x-python-code', 'application/x-ruby', 'application/x-php'
+            ];
+            
+            const isTextFile = textFileTypes.some(type => file.type.startsWith(type)) ||
+                              file.name.match(/\.(txt|json|xml|js|sh|bash|py|rb|php|csv|log|conf|config|env|ini|yaml|yml|sql|md)$/i);
+            
+            if (!isTextFile) {
+                return { hasSensitiveData: false, blocked: false, reason: 'Non-text file, skipping content scan' };
+            }
+            
+            // Limit file size for content scanning (max 1MB for content analysis)
+            const maxContentSize = 1024 * 1024; // 1MB
+            if (file.size > maxContentSize) {
+                return { hasSensitiveData: false, blocked: false, reason: 'File too large for content scanning' };
+            }
+            
+            // Read file content
+            const content = await this.readFileAsText(file);
+            if (!content) {
+                return { hasSensitiveData: false, blocked: false, reason: 'Could not read file content' };
+            }
+            
+            // Scan content with regex patterns
+            const sensitiveHits = this.checkPasteWithRegex(content);
+            
+            if (sensitiveHits.length > 0) {
+                // Determine overall severity and whether to block
+                const hasCritical = sensitiveHits.some(hit => hit.severity === 'critical');
+                const hasHigh = sensitiveHits.some(hit => hit.severity === 'high');
+                const shouldBlock = hasCritical || hasHigh; // Block on critical or high severity
+                
+                return {
+                    hasSensitiveData: true,
+                    blocked: shouldBlock,
+                    severity: hasCritical ? 'critical' : (hasHigh ? 'high' : 'medium'),
+                    hits: sensitiveHits,
+                    reason: `DLP: Detected ${sensitiveHits.length} sensitive data pattern(s) in file content`,
+                    details: sensitiveHits.map(hit => ({
+                        type: hit.type,
+                        severity: hit.severity,
+                        snippet: hit.snippet
+                    }))
+                };
+            }
+            
+            return { hasSensitiveData: false, blocked: false, reason: 'No sensitive data patterns detected' };
+            
+        } catch (error) {
+            return { 
+                hasSensitiveData: false,
+                blocked: false,
+                reason: `Content scan failed: ${error.message}`,
+                error: true 
+            };
+        }
+    },
+
+    readFileAsText(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.onerror = (e) => reject(new Error('Failed to read file'));
+            reader.readAsText(file);
+        });
+    },
+
+    // Enhanced file danger check with content scanning - RETURNS BLOCKING DECISION
+    async isFileDangerousWithContent(file) {
+        // First check basic file properties
+        const basicDanger = this.isFileDangerous(file);
+        if (basicDanger) {
+            return {
+                dangerous: true,
+                blocked: true, // Always block for size/extension violations
+                reason: this.getBlockReason(file),
+                type: 'metadata',
+                details: null
+            };
+        }
+        
+        // Then check file content for sensitive data
+        const contentScan = await this.scanFileContent(file);
+        if (contentScan.hasSensitiveData && contentScan.blocked) {
+            return {
+                dangerous: true,
+                blocked: true, // Block based on content
+                reason: contentScan.reason,
+                severity: contentScan.severity,
+                type: 'content',
+                details: contentScan.details
+            };
+        }
+        
+        return {
+            dangerous: false,
+            blocked: false,
+            reason: 'File is safe',
+            type: 'none',
+            details: null
+        };
+    },
     
     formatFileSize(bytes) {
         if (bytes === 0) return '0 Bytes';
@@ -56,7 +166,7 @@ const SecurityRules = {
         };
     },
 
-    // --- NEW: URL reputation check (calls backend proxy) ---
+    // --- URL reputation check (calls backend proxy) ---
     async checkUrlReputation(url) {
         try {
             const backendUrl = 'http://localhost:8000/api/reputation';
@@ -67,7 +177,6 @@ const SecurityRules = {
             });
             if (!resp.ok) return { error: true };
             const j = await resp.json();
-            // expected: { malicious: bool, score: number, sources: {...} }
             return j;
         } catch (e) {
             console.warn('[SecurityRules] URL reputation check failed:', e);
@@ -75,89 +184,56 @@ const SecurityRules = {
         }
     },
 
-    // --- NEW: JS exec / obfuscation scanner ---
+    // --- JS exec / obfuscation scanner ---
     scanDocumentForJsEvasion() {
         const suspicious = [];
         const currentDomain = window.location.hostname.toLowerCase();
         
-        // Comprehensive whitelist of trusted domains that commonly use legitimate obfuscation
         const trustedDomains = [
-            // Social Media & Communication
             'instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'linkedin.com',
             'tiktok.com', 'snapchat.com', 'pinterest.com', 'reddit.com', 'telegram.org',
             'whatsapp.com', 'messenger.com', 'discord.com', 'slack.com', 'zoom.us',
-            
-            // Search & Tech Giants
             'google.com', 'youtube.com', 'gmail.com', 'googleapis.com', 'googleusercontent.com',
             'microsoft.com', 'bing.com', 'outlook.com', 'office.com', 'azure.com',
             'apple.com', 'icloud.com', 'appstore.com', 'itunes.com',
-            
-            // E-commerce & Services
             'amazon.com', 'amazonaws.com', 'ebay.com', 'paypal.com', 'stripe.com',
             'shopify.com', 'etsy.com', 'alibaba.com', 'walmart.com', 'target.com',
-            
-            // Entertainment & Media
             'netflix.com', 'spotify.com', 'youtube.com', 'twitch.tv', 'hulu.com',
             'disney.com', 'hbo.com', 'paramount.com', 'peacock.com',
-            
-            // Development & Tech
             'github.com', 'gitlab.com', 'stackoverflow.com', 'stackexchange.com',
             'npmjs.com', 'jsdelivr.net', 'unpkg.com', 'cdnjs.cloudflare.com',
             'codepen.io', 'jsfiddle.net', 'repl.it', 'codesandbox.io',
-            
-            // Cloud & CDN Services
             'cloudflare.com', 'aws.amazon.com', 'cloud.google.com', 'azure.microsoft.com',
             'fastly.com', 'keycdn.com', 'bunnycdn.com', 'jsdelivr.net',
-            
-            // News & Information
             'cnn.com', 'bbc.com', 'nytimes.com', 'washingtonpost.com', 'reuters.com',
             'bloomberg.com', 'forbes.com', 'techcrunch.com', 'wired.com',
-            
-            // Banking & Finance
             'chase.com', 'bankofamerica.com', 'wellsfargo.com', 'citibank.com',
             'paypal.com', 'venmo.com', 'cashapp.com', 'robinhood.com',
-            
-            // Education
             'coursera.org', 'udemy.com', 'edx.org', 'khanacademy.org',
             'mit.edu', 'stanford.edu', 'harvard.edu', 'yale.edu',
-            
-            // Government & Official
             'gov.uk', 'usa.gov', 'irs.gov', 'ssa.gov', 'usps.com',
-            
-            // Additional Popular Sites
             'wikipedia.org', 'imdb.com', 'booking.com', 'expedia.com',
             'tripadvisor.com', 'yelp.com', 'craigslist.org', 'indeed.com',
             'glassdoor.com', 'monster.com', 'ziprecruiter.com'
         ];
         
-        // Enhanced domain matching for subdomains and variations
         const isTrustedDomain = (domain, trustedList) => {
-            // Direct match
             if (trustedList.includes(domain)) return true;
-            
-            // Subdomain match (e.g., www.instagram.com, api.instagram.com)
             if (trustedList.some(trusted => domain.endsWith('.' + trusted))) return true;
-            
-            // Parent domain match (e.g., instagram.com matches www.instagram.com)
             if (trustedList.some(trusted => domain.includes(trusted))) return true;
-            
             return false;
         };
         
-        // Skip scanning for trusted domains and their subdomains
         if (isTrustedDomain(currentDomain, trustedDomains)) {
             return suspicious;
         }
         
-        // Only scan for highly suspicious patterns on non-trusted domains
         for (const s of Array.from(document.querySelectorAll('script'))) {
             const code = s.textContent || '';
-            if (!code || code.length < 50) continue; // Skip small scripts
+            if (!code || code.length < 50) continue;
             
-            // Skip common legitimate obfuscated scripts
             if (this.isLegitimateScript(code, s)) continue;
             
-            // Only flag highly suspicious patterns
             if (this.isHighlySuspiciousCode(code)) {
                 suspicious.push({
                     type: 'inline_script', 
@@ -167,7 +243,6 @@ const SecurityRules = {
             }
         }
         
-        // 2) check attributes that can execute JS (on*)
         for (const el of Array.from(document.querySelectorAll('[onclick],[onload],[onerror],[onmouseover],[onfocus],[onblur]'))) {
             const attrs = [];
             const eventAttrs = ['onclick', 'onload', 'onerror', 'onmouseover', 'onfocus', 'onblur'];
@@ -175,7 +250,6 @@ const SecurityRules = {
             for (const name of eventAttrs) {
                 if (el.hasAttribute(name)) {
                     const value = el.getAttribute(name);
-                    // Check for suspicious patterns in event handlers
                     if (/eval\s*\(|new\s+Function|javascript:/i.test(value)) {
                         attrs.push({name, value: value.slice(0, 100)});
                     }
@@ -191,7 +265,6 @@ const SecurityRules = {
             }
         }
         
-        // 3) Check for dynamic script injection
         const scripts = Array.from(document.querySelectorAll('script[src]'));
         for (const script of scripts) {
             const src = script.src;
@@ -208,23 +281,18 @@ const SecurityRules = {
     },
     
     isHighlySuspiciousCode(code) {
-        // Pattern 1: Multiple eval calls in sequence (highly suspicious)
         const evalCount = (code.match(/eval\s*\(/g) || []).length;
         if (evalCount >= 3) return true;
         
-        // Pattern 2: Heavily obfuscated with multiple encoding layers
         const encodingLayers = (code.match(/\\x[0-9A-Fa-f]{2}/g) || []).length;
         const base64Patterns = (code.match(/atob\s*\(/g) || []).length;
         if (encodingLayers >= 10 || base64Patterns >= 5) return true;
         
-        // Pattern 3: Suspicious function construction patterns
         if (/new\s+Function\s*\(\s*['"`][^'"]{50,}['"`]\s*\)/g.test(code)) return true;
         
-        // Pattern 4: Extremely high obfuscation ratio (>60% special chars)
         const specialCharRatio = (code.match(/[^a-zA-Z0-9\s]/g) || []).length / code.length;
         if (specialCharRatio > 0.6 && code.length > 200) return true;
         
-        // Pattern 5: Multiple setTimeout with obfuscated strings
         const setTimeoutCount = (code.match(/setTimeout\s*\(\s*['"`][^'"]{20,}['"`]/g) || []).length;
         if (setTimeoutCount >= 3) return true;
         
@@ -244,31 +312,17 @@ const SecurityRules = {
     },
     
     isLegitimateScript(code, scriptElement) {
-        // Check for common legitimate obfuscated scripts
-        
-        // Google Analytics / Google Tag Manager
         if (code.includes('gtag') || code.includes('ga(') || code.includes('GoogleAnalytics')) return true;
         if (code.includes('dataLayer') || code.includes('gtm')) return true;
-        
-        // Facebook Pixel
         if (code.includes('fbq') || code.includes('FacebookPixel')) return true;
-        
-        // Common analytics and tracking
         if (code.includes('mixpanel') || code.includes('amplitude') || code.includes('segment')) return true;
         if (code.includes('hotjar') || code.includes('fullstory') || code.includes('logrocket')) return true;
-        
-        // Ad networks and monetization
         if (code.includes('adsystem') || code.includes('doubleclick') || code.includes('googlesyndication')) return true;
         if (code.includes('amazon-adsystem') || code.includes('adsbygoogle')) return true;
-        
-        // CDN and performance scripts
         if (code.includes('cloudflare') || code.includes('jsdelivr') || code.includes('unpkg')) return true;
-        
-        // Common frameworks and libraries (often minified/obfuscated)
         if (code.includes('jquery') || code.includes('react') || code.includes('angular') || code.includes('vue')) return true;
         if (code.includes('bootstrap') || code.includes('lodash') || code.includes('moment')) return true;
         
-        // Check script src for external trusted sources
         if (scriptElement.src) {
             const src = scriptElement.src.toLowerCase();
             if (src.includes('googleapis.com') || src.includes('gstatic.com')) return true;
@@ -277,16 +331,14 @@ const SecurityRules = {
             if (src.includes('facebook.net') || src.includes('instagram.com')) return true;
         }
         
-        // Check for common legitimate patterns that might look obfuscated
         if (code.includes('webpackJsonp') || code.includes('__webpack_require__')) return true;
-        if (code.includes('define(') || code.includes('require(')) return true; // AMD/CommonJS modules
+        if (code.includes('define(') || code.includes('require(')) return true;
         
         return false;
     },
 
     // --- Enhanced paste content checks (local regex heuristics only) ---
     PASTE_REGEXES: {
-        // API Keys and Tokens
         API_KEY: /(?:api[_-]?key|token|secret|password)[\s:=]{0,3}[A-Za-z0-9\-\._]{16,}/i,
         AWS_ACCESS_KEY: /AKIA[0-9A-Z]{16}/,
         AWS_SECRET_KEY: /[A-Za-z0-9/+=]{40}/,
@@ -296,40 +348,26 @@ const SecurityRules = {
         DISCORD_TOKEN: /[MN][A-Za-z\d]{23}\.[\w-]{6}\.[\w-]{27}/,
         STRIPE_KEY: /sk_live_[0-9a-zA-Z]{24}/,
         TWILIO_TOKEN: /[0-9a-fA-F]{32}/,
-        
-        // Cryptographic Keys
         PRIVATE_KEY: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PRIVATE\s+KEY-----/,
         PUBLIC_KEY: /-----BEGIN\s+(?:RSA\s+)?PUBLIC\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?PUBLIC\s+KEY-----/,
         JWT: /^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$/,
-        
-        // Personal Information
         SSN: /\b\d{3}-\d{2}-\d{4}\b/,
         CREDIT_CARD: /\b(?:\d{4}[-\s]?){3}\d{4}\b/,
         EMAIL: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/,
         PHONE: /\b(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b/,
-        
-        // Encoded Data
         LONG_BASE64: /\b(?:[A-Za-z0-9+\/]{100,}={0,2})\b/,
         HEX_ENCODED: /\b(?:[0-9a-fA-F]{2}){20,}\b/,
-        
-        // Database and Connection Strings
         MONGODB_URI: /mongodb(?:\+srv)?:\/\/[^\s]+/,
         POSTGRES_URI: /postgres(?:ql)?:\/\/[^\s]+/,
         MYSQL_URI: /mysql:\/\/[^\s]+/,
         REDIS_URI: /redis:\/\/[^\s]+/,
-        
-        // Cloud Service Keys
         GOOGLE_API_KEY: /AIza[0-9A-Za-z\\-_]{35}/,
         FIREBASE_KEY: /[A-Za-z0-9_-]{147}/,
         AZURE_KEY: /[0-9a-fA-F]{32}/,
-        
-        // Malicious Patterns
         SHELL_COMMANDS: /(?:rm\s+-rf|del\s+\/s|format\s+c:|shutdown|reboot|halt)/i,
         SQL_INJECTION: /(?:union\s+select|drop\s+table|delete\s+from|insert\s+into).*?(?:--|#|\/\*)/i,
         XSS_PATTERNS: /<script[^>]*>.*?<\/script>|<iframe[^>]*>.*?<\/iframe>|javascript:/i,
         PATH_TRAVERSAL: /\.\.\/(?:\.\.\/)*[^\s]*/,
-        
-        // Suspicious URLs
         SUSPICIOUS_URL: /(?:bit\.ly|tinyurl|t\.co|goo\.gl|ow\.ly)\/[A-Za-z0-9]+/,
         IP_ADDRESS: /\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/
     },
@@ -352,18 +390,14 @@ const SecurityRules = {
         return hits;
     },
 
-    // Classify severity levels for different types of sensitive data
     getSeverityLevel(type) {
         const severityMap = {
-            // Critical - Immediate block
             'PRIVATE_KEY': 'critical',
             'AWS_SECRET_KEY': 'critical',
             'STRIPE_KEY': 'critical',
             'SHELL_COMMANDS': 'critical',
             'SQL_INJECTION': 'critical',
             'XSS_PATTERNS': 'critical',
-            
-            // High - Block with warning
             'API_KEY': 'high',
             'AWS_ACCESS_KEY': 'high',
             'GITHUB_TOKEN': 'high',
@@ -379,8 +413,6 @@ const SecurityRules = {
             'MYSQL_URI': 'high',
             'REDIS_URI': 'high',
             'JWT': 'high',
-            
-            // Medium - Warn user
             'SSN': 'medium',
             'CREDIT_CARD': 'medium',
             'LONG_BASE64': 'medium',
@@ -388,8 +420,6 @@ const SecurityRules = {
             'PATH_TRAVERSAL': 'medium',
             'SUSPICIOUS_URL': 'medium',
             'IP_ADDRESS': 'medium',
-            
-            // Low - Informational
             'EMAIL': 'low',
             'PHONE': 'low',
             'PUBLIC_KEY': 'low'
@@ -398,96 +428,158 @@ const SecurityRules = {
         return severityMap[type] || 'medium';
     },
 
-    // Enhanced local classification without external API calls
+    // Enhanced local classification - RETURNS BLOCKING DECISION
     classifyPasteLocally(text) {
         const regexHits = this.checkPasteWithRegex(text);
         
         if (regexHits.length === 0) {
-            return { label: 'benign', reason: 'No suspicious patterns detected', confidence: 0.8 };
+            return { 
+                label: 'benign', 
+                blocked: false,
+                reason: 'No suspicious patterns detected', 
+                confidence: 0.8 
+            };
         }
         
-        // Check for critical severity items
+        // Check for critical severity items - BLOCK
         const criticalHits = regexHits.filter(hit => hit.severity === 'critical');
         if (criticalHits.length > 0) {
             return {
                 label: 'malicious',
+                blocked: true, // BLOCK critical items
                 reason: `Critical security risk detected: ${criticalHits.map(h => h.type).join(', ')}`,
                 confidence: 0.95,
                 details: criticalHits
             };
         }
         
-        // Check for high severity items
+        // Check for high severity items - BLOCK
         const highHits = regexHits.filter(hit => hit.severity === 'high');
         if (highHits.length > 0) {
             return {
                 label: 'suspicious',
+                blocked: true, // BLOCK high severity items
                 reason: `Sensitive data detected: ${highHits.map(h => h.type).join(', ')}`,
                 confidence: 0.85,
                 details: highHits
             };
         }
         
-        // Check for medium severity items
+        // Check for medium severity items - WARN but don't block
         const mediumHits = regexHits.filter(hit => hit.severity === 'medium');
         if (mediumHits.length > 0) {
             return {
                 label: 'suspicious',
+                blocked: false, // WARN only
                 reason: `Potentially sensitive content: ${mediumHits.map(h => h.type).join(', ')}`,
                 confidence: 0.7,
                 details: mediumHits
             };
         }
         
-        // Low severity items
+        // Low severity items - allow
         return {
             label: 'benign',
+            blocked: false,
             reason: 'Minor sensitive patterns detected but likely safe',
             confidence: 0.6,
             details: regexHits
         };
     },
 
-    // Redact sensitive information before sending to backend
+    // Redact sensitive information
     redactSensitive(text) {
         let redacted = text;
         
-        // Redact API keys and tokens
         redacted = redacted.replace(this.PASTE_REGEXES.API_KEY, '[REDACTED_API_KEY]');
         redacted = redacted.replace(this.PASTE_REGEXES.AWS_ACCESS_KEY, '[REDACTED_AWS_KEY]');
         redacted = redacted.replace(this.PASTE_REGEXES.GITHUB_TOKEN, '[REDACTED_GITHUB_TOKEN]');
         redacted = redacted.replace(this.PASTE_REGEXES.SLACK_TOKEN, '[REDACTED_SLACK_TOKEN]');
-        
-        // Redact private keys
         redacted = redacted.replace(this.PASTE_REGEXES.PRIVATE_KEY, '[REDACTED_PRIVATE_KEY]');
         
-        // Redact JWTs (keep structure but mask content)
         redacted = redacted.replace(this.PASTE_REGEXES.JWT, (match) => {
             const parts = match.split('.');
             return parts[0] + '.[REDACTED].[REDACTED]';
         });
         
-        // Redact credit cards (keep last 4 digits)
         redacted = redacted.replace(this.PASTE_REGEXES.CREDIT_CARD, (match) => {
             const digits = match.replace(/\D/g, '');
             return '****-****-****-' + digits.slice(-4);
         });
         
-        // Redact SSNs
         redacted = redacted.replace(this.PASTE_REGEXES.SSN, '***-**-****');
         
         return redacted;
     },
 
-    // SECURITY: Removed classifyPasteWithGPT to prevent data leakage
-    // This function was sending potentially sensitive data to external APIs
-    // Use enhanced local detection instead
+    // REMOVED: classifyPasteWithGPT to prevent data leakage
     async classifyPasteWithGPT(text) {
         console.warn('[SecurityRules] classifyPasteWithGPT is disabled for security reasons');
-        return { error: true, reason: 'Function disabled to prevent data leakage' };
+        return { error: true, blocked: false, reason: 'Function disabled to prevent data leakage' };
     },
 
-    // --- NEW: Enhanced security checks ---
+    // --- PASTE EVENT INTERCEPTOR ---
+    // Call this function to initialize paste blocking
+    initializePasteProtection(options = {}) {
+        const {
+            onBlock = null,  // Callback when paste is blocked
+            onWarn = null,   // Callback when paste triggers warning
+            blockSelector = 'input, textarea, [contenteditable]' // Elements to protect
+        } = options;
+
+        document.addEventListener('paste', async (event) => {
+            try {
+                const clipboardData = event.clipboardData || window.clipboardData;
+                const pastedText = clipboardData.getData('text');
+                
+                if (!pastedText || pastedText.length === 0) {
+                    return; // Allow empty pastes
+                }
+
+                // Classify the pasted content
+                const classification = this.classifyPasteLocally(pastedText);
+                
+                if (classification.blocked) {
+                    // BLOCK the paste
+                    event.preventDefault();
+                    event.stopPropagation();
+                    
+                    console.warn('[SecurityRules] Paste blocked:', classification.reason);
+                    
+                    // Call blocking callback if provided
+                    if (onBlock && typeof onBlock === 'function') {
+                        onBlock({
+                            reason: classification.reason,
+                            details: classification.details,
+                            severity: classification.label
+                        });
+                    }
+                    
+                    // Show alert to user
+                    alert(`Paste blocked!\n\n${classification.reason}\n\nThis content contains sensitive information that cannot be pasted for security reasons.`);
+                    
+                } else if (classification.details && classification.details.length > 0) {
+                    // WARN but allow paste
+                    console.warn('[SecurityRules] Paste warning:', classification.reason);
+                    
+                    if (onWarn && typeof onWarn === 'function') {
+                        onWarn({
+                            reason: classification.reason,
+                            details: classification.details,
+                            severity: classification.label
+                        });
+                    }
+                }
+                
+            } catch (error) {
+                console.error('[SecurityRules] Error in paste protection:', error);
+            }
+        }, true); // Use capture phase to intercept early
+
+        console.log('[SecurityRules] Paste protection initialized');
+    },
+
+    // --- Enhanced security checks ---
     async performComprehensiveCheck(url) {
         const results = {
             url: url,
@@ -495,14 +587,12 @@ const SecurityRules = {
             checks: {}
         };
 
-        // URL reputation check
         try {
             results.checks.reputation = await this.checkUrlReputation(url);
         } catch (e) {
             results.checks.reputation = { error: true };
         }
 
-        // JS evasion scan
         try {
             results.checks.jsEvasion = this.scanDocumentForJsEvasion();
         } catch (e) {
@@ -524,7 +614,6 @@ const SecurityRules = {
         }
         
         const requests = this._rateLimitStore.get(key);
-        // Remove old requests outside the window
         const validRequests = requests.filter(time => time > windowStart);
         
         if (validRequests.length >= maxRequests) {

@@ -6,8 +6,6 @@
   "permissions": [
     "storage",
     "tabs",
-    "webRequest",
-    "webRequestBlocking",
     "webNavigation",
     "activeTab",
     "scripting"

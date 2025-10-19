@@ -18,6 +18,18 @@ class Log(Base):
     type = Column(String, nullable=False)
     reason = Column(String, nullable=False)
 
+class McpLog(Base):
+    __tablename__ = "mcp_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    timestamp = Column(DateTime, nullable=False)
+    level = Column(String, nullable=False)
+    message = Column(String, nullable=False)
+    command = Column(String, nullable=True)
+    tool = Column(String, nullable=True)
+    target = Column(String, nullable=True)
+    log_source = Column(String, default="mcp")
+
 def get_db():
     db = SessionLocal()
     try:

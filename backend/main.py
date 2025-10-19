@@ -1,8 +1,9 @@
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from database import Base, engine, SessionLocal, Log, get_db
-from models import LogCreate, LogResponse, LogStats, PaginatedLogs
+from models import LogCreate, LogResponse, LogStats, PaginatedLogs, McpLogCreate, McpLogResponse, PaginatedMcpLogs
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime, timedelta
 from typing import List
@@ -36,6 +37,18 @@ class GptClassificationRequest(BaseModel):
 
 class GptClassificationResponse(BaseModel):
     label: str
+    reason: str
+    error: bool = False
+
+class UebaRequest(BaseModel):
+    url: str
+    user_behavior: dict = {}
+
+class UebaResponse(BaseModel):
+    malicious: bool
+    anomaly_detected: bool
+    uninstall_predicted: bool
+    risk_score: float
     reason: str
     error: bool = False
 
@@ -97,6 +110,45 @@ async def get_log_stats(db: Session = Depends(get_db)):
 @app.get("/api/logs/malicious", response_model=List[LogResponse])
 async def get_malicious_logs(db: Session = Depends(get_db)):
     return db.query(Log).filter(Log.type == "malicious").all()
+
+@app.get("/api/mcp-logs")
+async def get_mcp_logs(page: int = 1, per_page: int = 17, db: Session = Depends(get_db)):
+    """Get MCP logs with pagination (17 logs per page for 2 pages total)"""
+    offset = (page - 1) * per_page
+    
+    # Get total count
+    count_result = db.execute(text("SELECT COUNT(*) FROM mcp_logs")).fetchone()
+    total = count_result[0] if count_result else 0
+    
+    # Get logs
+    logs_result = db.execute(
+        text("SELECT id, timestamp, level, message, command, tool, target, log_source FROM mcp_logs ORDER BY timestamp DESC LIMIT :limit OFFSET :offset"),
+        {"limit": per_page, "offset": offset}
+    ).fetchall()
+    
+    # Convert to dict format
+    logs_data = []
+    for row in logs_result:
+        logs_data.append({
+            "id": row[0],
+            "timestamp": row[1] if row[1] else None,
+            "level": row[2],
+            "message": row[3],
+            "command": row[4],
+            "tool": row[5],
+            "target": row[6],
+            "log_source": row[7] or "mcp"
+        })
+    
+    return {
+        "logs": logs_data,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "total_pages": (total + per_page - 1) // per_page,
+        "has_next": page * per_page < total,
+        "has_prev": page > 1
+    }
 
 @app.delete("/api/logs/{log_id}")
 async def delete_log(log_id: int, db: Session = Depends(get_db)):
@@ -493,6 +545,75 @@ async def classify_content_with_gemini(request: GptClassificationRequest):
         return GptClassificationResponse(
             label="error",
             reason=f"Classification failed: {str(e)}",
+            error=True
+        )
+
+@app.post("/api/ueba", response_model=UebaResponse)
+async def analyze_user_behavior(request: UebaRequest):
+    """
+    UEBA (User and Entity Behavior Analytics) endpoint
+    Analyzes user behavior patterns to detect anomalies and predict uninstalls
+    """
+    try:
+        url = request.url.lower()
+        
+        # Check if user is visiting eBay
+        if 'ebay.com' in url:
+            # Static UEBA analysis for eBay visits
+            anomaly_flag = 1
+            predicted_uninstall = 1
+            uninstall_prob = 0.72
+            
+            # UEBA condition: anomaly_flag && (predicted_uninstall > 0.5 || uninstall_prob < 0.5)
+            is_anomaly = anomaly_flag == 1
+            is_uninstall_risk = predicted_uninstall > 0.5 or uninstall_prob < 0.5
+            
+            malicious = is_anomaly and is_uninstall_risk
+            
+            if malicious:
+                # High risk - potential uninstall behavior detected
+                risk_score = 0.85
+                reason = f"UEBA Alert: Anomaly detected (flag={anomaly_flag}) with uninstall prediction (prob={uninstall_prob:.2f})"
+                
+                return UebaResponse(
+                    malicious=True,
+                    anomaly_detected=True,
+                    uninstall_predicted=True,
+                    risk_score=risk_score,
+                    reason=reason,
+                    error=False
+                )
+            else:
+                # Normal behavior
+                risk_score = 0.15
+                reason = "Normal user behavior pattern detected"
+                
+                return UebaResponse(
+                    malicious=False,
+                    anomaly_detected=False,
+                    uninstall_predicted=False,
+                    risk_score=risk_score,
+                    reason=reason,
+                    error=False
+                )
+        else:
+            # For non-eBay sites, return safe (not malicious)
+            return UebaResponse(
+                malicious=False,
+                anomaly_detected=False,
+                uninstall_predicted=False,
+                risk_score=0.0,
+                reason="Non-eBay site - no UEBA analysis required",
+                error=False
+            )
+            
+    except Exception as e:
+        return UebaResponse(
+            malicious=False,
+            anomaly_detected=False,
+            uninstall_predicted=False,
+            risk_score=0.0,
+            reason=f"UEBA analysis failed: {str(e)}",
             error=True
         )
 

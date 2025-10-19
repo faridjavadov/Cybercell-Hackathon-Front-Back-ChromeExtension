@@ -1,28 +1,26 @@
-// Inspy Security Extension - Content Script
-// CSP-Safe version: Uses web_accessible_resources instead of inline scripts
+// Inspy Security Extension - Content Script (FIXED)
+// Unified blocking logic for paste and file content
 
 (function() {
     'use strict';
 
-
-    // Load SecurityRules from external file (CSP-safe)
     let SecurityRules = null;
     
-    // Try to load SecurityRules from the utils file
+    // Check if SecurityRules is already available globally
+    if (typeof window.SecurityRules !== 'undefined') {
+        SecurityRules = window.SecurityRules;
+        console.log('[Inspy] SecurityRules found in global scope');
+    }
+    
     function loadSecurityRules() {
         try {
-            // Import the rules from the utils file
-            const script = document.createElement('script');
-            script.src = chrome.runtime.getURL('utils/rules.js');
-            script.onload = function() {
-                SecurityRules = window.SecurityRules;
+            if (typeof SecurityRules !== 'undefined') {
+                console.log('[Inspy] SecurityRules loaded successfully');
                 initializeSecurityChecks();
-            };
-            script.onerror = function() {
-                console.error('[Inspy] Failed to load SecurityRules, using fallback');
+            } else {
+                console.error('[Inspy] SecurityRules not available, using fallback');
                 loadFallbackSecurityRules();
-            };
-            document.head.appendChild(script);
+            }
         } catch (e) {
             console.error('[Inspy] Error loading SecurityRules:', e);
             loadFallbackSecurityRules();
@@ -36,21 +34,36 @@
                 '.exe', '.dll', '.bat', '.ps1', '.jar', '.scr', '.com', '.pif',
                 '.cmd', '.vbs', '.js', '.jse', '.wsf', '.wsh', '.msi', '.msp'
             ],
+            
+            // Basic regex patterns for fallback
+            PASTE_REGEXES: {
+                API_KEY: /(?:api[_-]?key|token|secret|password)[\s:=]{0,3}[A-Za-z0-9\-\._]{16,}/i,
+                AWS_ACCESS_KEY: /AKIA[0-9A-Z]{16}/,
+                GITHUB_TOKEN: /ghp_[A-Za-z0-9]{36}/,
+                PRIVATE_KEY: /-----BEGIN\s+(?:RSA\s+)?PRIVATE\s+KEY-----/,
+                SSN: /\b\d{3}-\d{2}-\d{4}\b/,
+                CREDIT_CARD: /\b(?:\d{4}[-\s]?){3}\d{4}\b/
+            },
+            
             checkFileSize(file) { 
                 return file.size > this.MAX_FILE_SIZE; 
             },
+            
             checkFileExtension(file) {
                 const fileName = file.name.toLowerCase();
                 return this.DANGEROUS_EXTENSIONS.some(ext => fileName.endsWith(ext));
             },
+            
             isFileDangerous(file) {
                 return this.checkFileSize(file) || this.checkFileExtension(file);
             },
+            
             getBlockReason(file) {
                 if (this.checkFileSize(file)) return 'Large file (>10MB)';
                 if (this.checkFileExtension(file)) return 'Forbidden extension';
                 return 'None';
             },
+            
             formatFileSize(bytes) {
                 if (bytes === 0) return '0 Bytes';
                 const k = 1024;
@@ -58,60 +71,129 @@
                 const i = Math.floor(Math.log(bytes) / Math.log(k));
                 return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
             },
-            // Basic fallback methods
+            
+            getSeverityLevel(type) {
+                const critical = ['PRIVATE_KEY', 'AWS_SECRET_KEY', 'STRIPE_KEY'];
+                const high = ['API_KEY', 'AWS_ACCESS_KEY', 'GITHUB_TOKEN', 'JWT'];
+                
+                if (critical.includes(type)) return 'critical';
+                if (high.includes(type)) return 'high';
+                return 'medium';
+            },
+            
+            checkPasteWithRegex(text) {
+                const hits = [];
+                for (const [k, rx] of Object.entries(this.PASTE_REGEXES)) {
+                    if (rx instanceof RegExp && rx.test(text)) {
+                        const matches = text.match(rx);
+                        if (matches) {
+                            hits.push({
+                                type: k,
+                                snippet: matches[0].slice(0, 50),
+                                severity: this.getSeverityLevel(k)
+                            });
+                        }
+                    }
+                }
+                return hits;
+            },
+            
+            classifyPasteLocally(text) {
+                const hits = this.checkPasteWithRegex(text);
+                
+                if (hits.length === 0) {
+                    return { label: 'benign', blocked: false };
+                }
+                
+                const critical = hits.filter(h => h.severity === 'critical');
+                const high = hits.filter(h => h.severity === 'high');
+                
+                if (critical.length > 0 || high.length > 0) {
+                    return {
+                        label: 'malicious',
+                        blocked: true,
+                        reason: `Sensitive data detected: ${hits.map(h => h.type).join(', ')}`,
+                        details: hits
+                    };
+                }
+                
+                return {
+                    label: 'suspicious',
+                    blocked: false,
+                    reason: `Potentially sensitive: ${hits.map(h => h.type).join(', ')}`,
+                    details: hits
+                };
+            },
+            
+            async readFileAsText(file) {
+                return new Promise((resolve, reject) => {
+                    const maxSize = 1024 * 1024; // 1MB
+                    const slice = file.slice(0, Math.min(file.size, maxSize));
+                    const reader = new FileReader();
+                    reader.onload = (e) => resolve(e.target.result);
+                    reader.onerror = () => reject(new Error('Failed to read file'));
+                    reader.readAsText(slice);
+                });
+            },
+            
+            async isFileDangerousWithContent(file) {
+                // Check basic properties first
+                const basicDanger = this.isFileDangerous(file);
+                if (basicDanger) {
+                    return {
+                        dangerous: true,
+                        blocked: true,
+                        reason: this.getBlockReason(file),
+                        type: 'metadata'
+                    };
+                }
+                
+                // Check if it's a text file
+                const textExtensions = /\.(txt|json|xml|js|sh|bash|py|rb|php|csv|log|conf|config|env|ini|yaml|yml|sql|md)$/i;
+                if (!textExtensions.test(file.name)) {
+                    return { dangerous: false, blocked: false, reason: 'Non-text file' };
+                }
+                
+                // Scan content
+                try {
+                    const content = await this.readFileAsText(file);
+                    const hits = this.checkPasteWithRegex(content);
+                    
+                    if (hits.length > 0) {
+                        const critical = hits.filter(h => h.severity === 'critical');
+                        const high = hits.filter(h => h.severity === 'high');
+                        const shouldBlock = critical.length > 0 || high.length > 0;
+                        
+                        return {
+                            dangerous: true,
+                            blocked: shouldBlock,
+                            reason: `DLP: ${hits.length} sensitive pattern(s) detected`,
+                            type: 'content',
+                            severity: critical.length > 0 ? 'critical' : (high.length > 0 ? 'high' : 'medium'),
+                            details: hits.map(h => ({
+                                type: h.type,
+                                severity: h.severity,
+                                snippet: h.snippet
+                            }))
+                        };
+                    }
+                } catch (error) {
+                    console.error('[Inspy] File scan error:', error);
+                }
+                
+                return { dangerous: false, blocked: false, reason: 'File passed checks' };
+            },
+            
             async checkUrlReputation(url) { return { error: true }; },
             scanDocumentForJsEvasion() { return []; },
-            checkPasteWithRegex(text) { return []; },
-            async classifyPasteWithGPT(text) { return { error: true }; }
+            createSecurityLog(url, type, reason) {
+                return { url, timestamp: new Date().toISOString(), type, reason };
+            },
+            isRateLimited() { return false; }
         };
+        
         initializeSecurityChecks();
     }
-
-
-    // Inject SecurityRules into page using external script (CSP-safe)
-    function injectSecurityRulesCSPSafe() {
-        // Create an external script tag pointing to web_accessible_resource
-        const script = document.createElement('script');
-        script.src = chrome.runtime.getURL('inject.js');
-        script.onload = function() {
-            this.remove();
-            
-            // Verify injection worked
-            setTimeout(() => {
-                const checkScript = document.createElement('script');
-                checkScript.src = chrome.runtime.getURL('verify.js');
-                (document.head || document.documentElement).appendChild(checkScript);
-            }, 100);
-        };
-        script.onerror = function() {
-            console.error('[Inspy] ❌ Failed to load inject.js');
-        };
-        
-        (document.head || document.documentElement).appendChild(script);
-    }
-
-    // Try injection
-    injectSecurityRulesCSPSafe();
-
-    // Also use custom events for communication
-    window.addEventListener('message', (event) => {
-        if (event.source !== window) return;
-        
-        if (event.data.type === 'INSPY_CHECK_FILE') {
-            const file = event.data.file;
-            const result = {
-                dangerous: SecurityRules.isFileDangerous(file),
-                reason: SecurityRules.getBlockReason(file),
-                fileSize: SecurityRules.formatFileSize(file.size)
-            };
-            
-            window.postMessage({
-                type: 'INSPY_FILE_RESULT',
-                id: event.data.id,
-                result: result
-            }, '*');
-        }
-    });
 
     function showAlert(message, type = 'danger') {
         const wait = () => {
@@ -120,7 +202,11 @@
                 return;
             }
             
+            // Remove existing alerts
+            document.querySelectorAll('.inspy-security-alert').forEach(el => el.remove());
+            
             const alert = document.createElement('div');
+            alert.className = 'inspy-security-alert';
             alert.style.cssText = `
                 position: fixed;
                 top: 20px;
@@ -134,6 +220,7 @@
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
                 font-size: 14px;
                 max-width: 400px;
+                animation: slideIn 0.3s ease-out;
             `;
             
             alert.innerHTML = `
@@ -150,6 +237,19 @@
                 </div>
             `;
             
+            // Add CSS animation
+            if (!document.getElementById('inspy-styles')) {
+                const style = document.createElement('style');
+                style.id = 'inspy-styles';
+                style.textContent = `
+                    @keyframes slideIn {
+                        from { transform: translateX(400px); opacity: 0; }
+                        to { transform: translateX(0); opacity: 1; }
+                    }
+                `;
+                document.head.appendChild(style);
+            }
+            
             document.body.appendChild(alert);
             setTimeout(() => alert.remove(), 5000);
         };
@@ -164,63 +264,162 @@
             reason: reason
         };
         
-        
         try {
             chrome.runtime.sendMessage({ action: 'logSecurityEvent', log: log });
         } catch (e) {
+            console.warn('[Inspy] Failed to log event:', e);
         }
     }
 
-    function checkAndBlockFile(file) {
+    async function sendDlpLogToBackend(file, dangerResult) {
+        try {
+            const logData = {
+                url: window.location.href,
+                timestamp: new Date().toISOString(),
+                type: 'malicious',
+                reason: `${dangerResult.type}_detection: ${dangerResult.reason}`,
+                file_name: file.name,
+                file_size: file.size,
+                file_type: file.type,
+                dlp_details: {
+                    severity: dangerResult.severity,
+                    pattern_count: dangerResult.details ? dangerResult.details.length : 0,
+                    detected_patterns: dangerResult.details ? dangerResult.details.map(d => ({
+                        type: d.type,
+                        severity: d.severity,
+                        snippet: d.snippet
+                    })) : []
+                }
+            };
+
+            await fetch('http://localhost:8000/api/logs', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(logData)
+            });
+        } catch (error) {
+            console.warn('[Inspy] Failed to send DLP log:', error);
+        }
+    }
+
+    // ============================================
+    // FILE UPLOAD BLOCKING (CRITICAL FIX)
+    // ============================================
+    
+    async function checkAndBlockFile(file) {
+        console.log('[Inspy] 🔍 Checking file:', file.name, SecurityRules.formatFileSize(file.size));
         
-        if (SecurityRules.isFileDangerous(file)) {
-            const reason = SecurityRules.getBlockReason(file);
+        if (!SecurityRules) {
+            console.error('[Inspy] ❌ SecurityRules not available!');
+            return false;
+        }
+        
+        // CRITICAL: Use isFileDangerousWithContent which returns blocked property
+        const scanResult = await SecurityRules.isFileDangerousWithContent(file);
+        console.log('[Inspy] 📊 Scan result:', scanResult);
+        
+        // Check if file should be BLOCKED (same logic as file size)
+        if (scanResult.blocked || scanResult.dangerous) {
             const size = SecurityRules.formatFileSize(file.size);
+            let alertMessage = `🚫 BLOCKED: ${file.name} (${size})<br>${scanResult.reason}`;
             
-            showAlert(`Blocked: ${file.name} (${size})<br>${reason}`, 'danger');
-            logEvent('malicious', `${reason}: ${file.name}`);
+            if (scanResult.type === 'content' && scanResult.details) {
+                alertMessage += `<br><strong>DLP Alert:</strong> ${scanResult.severity.toUpperCase()}<br>`;
+                alertMessage += `Patterns: ${scanResult.details.slice(0, 3).map(d => d.type).join(', ')}`;
+                if (scanResult.details.length > 3) {
+                    alertMessage += ` +${scanResult.details.length - 3} more`;
+                }
+            }
             
-            return true;
+            showAlert(alertMessage, 'danger');
+            logEvent('malicious', `file_blocked: ${scanResult.reason} - ${file.name}`);
+            sendDlpLogToBackend(file, scanResult);
+            
+            console.log('[Inspy] 🚫 FILE BLOCKED - RETURNING TRUE');
+            return true; // BLOCK the file
         }
         
-        return false;
+        console.log('[Inspy] ✅ File passed checks');
+        return false; // Allow the file
     }
 
-    function handleFileInput(event) {
+    async function handleFileInput(event) {
         const input = event.target;
+        
         if (input.type !== 'file' || !input.files || input.files.length === 0) {
             return;
         }
 
+        console.log('[Inspy] 📁 File input event:', input.files.length, 'files');
         
-        let blocked = false;
-        for (let file of input.files) {
-            if (checkAndBlockFile(file)) {
-                blocked = true;
+        let anyBlocked = false;
+        const blockedFiles = [];
+        
+        // Check ALL files
+        for (let i = 0; i < input.files.length; i++) {
+            const file = input.files[i];
+            const isBlocked = await checkAndBlockFile(file);
+            
+            if (isBlocked) {
+                anyBlocked = true;
+                blockedFiles.push(file.name);
             }
         }
 
-        if (blocked) {
+        // If ANY file is blocked, PREVENT the upload completely
+        if (anyBlocked) {
+            console.log('[Inspy] 🚫 BLOCKING upload - blocked files:', blockedFiles);
+            
+            // CRITICAL: Stop the event completely
             event.preventDefault();
             event.stopPropagation();
             event.stopImmediatePropagation();
+            
+            // Clear the file input
             input.value = '';
+            if (input.files) {
+                try {
+                    input.files = null;
+                } catch (e) {
+                    // Some browsers don't allow setting files to null
+                }
+            }
+            
+            // Replace the input element to ensure it's cleared
+            const newInput = input.cloneNode(false);
+            input.parentNode.replaceChild(newInput, input);
+            
+            // Re-attach listener to new input
+            newInput.addEventListener('change', handleFileInput, true);
+            
+            console.log('[Inspy] ✅ Upload blocked and input cleared');
             return false;
         }
+        
+        console.log('[Inspy] ✅ All files passed checks');
     }
 
-    function handleFormSubmit(event) {
+    async function handleFormSubmit(event) {
         const form = event.target;
         const fileInputs = form.querySelectorAll('input[type="file"]');
+        
+        console.log('[Inspy] 📝 Form submit - checking', fileInputs.length, 'file inputs');
         
         for (let input of fileInputs) {
             if (input.files && input.files.length > 0) {
                 for (let file of input.files) {
-                    if (checkAndBlockFile(file)) {
+                    const isBlocked = await checkAndBlockFile(file);
+                    
+                    if (isBlocked) {
+                        console.log('[Inspy] 🚫 BLOCKING form submit');
+                        
                         event.preventDefault();
                         event.stopPropagation();
                         event.stopImmediatePropagation();
+                        
+                        // Clear the input
                         input.value = '';
+                        
                         return false;
                     }
                 }
@@ -228,20 +427,10 @@
         }
     }
 
-    // NEW: Enhanced security monitoring functions
-    function initializeSecurityChecks() {
-        
-        // Start basic monitoring
-        startMonitoring();
-        
-        // Add new security event listeners
-        setupPasteMonitoring();
-        setupUrlReputationCheck();
-        setupJsEvasionScanning();
-        
-    }
-
-    // NEW: Paste content monitoring
+    // ============================================
+    // PASTE CONTENT BLOCKING (WORKING)
+    // ============================================
+    
     function setupPasteMonitoring() {
         document.addEventListener('paste', async (e) => {
             try {
@@ -249,169 +438,73 @@
                 if (!clipboardData) return;
                 
                 const text = clipboardData.getData('text');
-                if (!text || text.length < 10) return; // Skip very short text
+                if (!text || text.length < 10) return;
                 
+                console.log('[Inspy] 📋 Paste detected, scanning...');
                 
-                // Check with regex patterns first (fast)
-                const regexHits = SecurityRules.checkPasteWithRegex(text);
-                if (regexHits.length > 0) {
+                // Use classifyPasteLocally which returns blocked property
+                const result = SecurityRules.classifyPasteLocally(text);
+                console.log('[Inspy] 📊 Paste scan result:', result);
+                
+                // Check blocked property (same as file content)
+                if (result.blocked) {
+                    console.log('[Inspy] 🚫 BLOCKING paste');
+                    
                     e.preventDefault();
-                    const hitTypes = regexHits.map(h => h.type).join(', ');
-                    showAlert(`🚫 Paste blocked: Sensitive data detected (${hitTypes})`, 'danger');
-                    logEvent('malicious', `paste_regex: ${hitTypes}`);
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    
+                    const types = result.details ? result.details.map(h => h.type).join(', ') : 'unknown';
+                    showAlert(`🚫 Paste blocked: ${result.reason}`, 'danger');
+                    logEvent('malicious', `paste_blocked: ${result.reason}`);
                     
                     try {
                         await fetch('http://localhost:8000/api/logs', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify(SecurityRules.createSecurityLog(
-                                window.location.href, 
-                                'malicious', 
-                                `paste_regex: ${hitTypes}`
-                            ))
+                            body: JSON.stringify({
+                                url: window.location.href,
+                                timestamp: new Date().toISOString(),
+                                type: 'malicious',
+                                reason: `paste_blocked: ${result.reason}`
+                            })
                         });
                     } catch (err) {
                         console.warn('[Inspy] Failed to log paste event:', err);
                     }
-                    return;
-                }
-                
-                // Enhanced local classification (no external API calls for security)
-                const localResult = SecurityRules.classifyPasteLocally(text);
-                if (localResult.label === 'malicious') {
-                    e.preventDefault();
-                    showAlert(`🚫 Paste blocked: ${localResult.reason}`, 'danger');
-                    logEvent('malicious', `paste_local: ${localResult.reason}`);
                     
-                    try {
-                        await fetch('http://localhost:8000/api/logs', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify(SecurityRules.createSecurityLog(
-                                window.location.href, 
-                                'malicious', 
-                                `paste_local: ${localResult.reason}`
-                            ))
-                        });
-                    } catch (err) {
-                        console.warn('[Inspy] Failed to log local classification:', err);
-                    }
                     return;
-                } else if (localResult.label === 'suspicious') {
-                    // Show warning but allow paste
-                    showAlert(`⚠️ Warning: ${localResult.reason}`, 'warning');
-                    logEvent('suspicious', `paste_local: ${localResult.reason}`);
                 }
                 
+                // Warn for suspicious but not blocked
+                if (result.details && result.details.length > 0 && !result.blocked) {
+                    console.log('[Inspy] ⚠️ Paste warning (not blocked)');
+                    showAlert(`⚠️ Warning: ${result.reason}`, 'warning');
+                    logEvent('suspicious', `paste_warning: ${result.reason}`);
+                }
                 
             } catch (err) {
                 console.error('[Inspy] Error in paste monitoring:', err);
             }
-        });
+        }, true); // Use capture phase
     }
 
-    function checkUrlLocally(url) {
-        try {
-            const urlObj = new URL(url);
-            const hostname = urlObj.hostname.toLowerCase();
-            const pathname = urlObj.pathname.toLowerCase();
-            
-            // Trusted domains that should never be flagged
-            const trustedDomains = [
-                'instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'linkedin.com',
-                'google.com', 'youtube.com', 'github.com', 'stackoverflow.com',
-                'amazon.com', 'netflix.com', 'spotify.com', 'discord.com',
-                'microsoft.com', 'apple.com', 'cloudflare.com', 'jsdelivr.net',
-                'tiktok.com', 'snapchat.com', 'pinterest.com', 'reddit.com'
-            ];
-            
-            // Skip local detection for trusted domains
-            if (trustedDomains.some(domain => hostname.includes(domain))) {
-                return { malicious: false, reason: 'Trusted domain' };
-            }
-            
-            // Known malicious patterns
-            const maliciousPatterns = [
-                /malware/i,
-                /virus/i,
-                /trojan/i,
-                /phishing/i,
-                /scam/i,
-                /fake/i,
-                /malicious/i,
-                /suspicious/i,
-                
-                // Common malicious file extensions
-                /\.exe$/i,
-                /\.scr$/i,
-                /\.bat$/i,
-                /\.cmd$/i,
-                /\.pif$/i,
-                /\.com$/i,
-                /\.jar$/i,
-                
-                // Suspicious paths
-                /\/malware\//i,
-                /\/virus\//i,
-                /\/trojan\//i,
-                /\/phishing\//i,
-                /\/scam\//i,
-                /\/fake\//i,
-                
-                /malware\./i,
-                /virus\./i,
-                /trojan\./i,
-                /phishing\./i,
-                /scam\./i,
-                /fake\./i,
-            ];
-            
-            for (const pattern of maliciousPatterns) {
-                if (pattern.test(hostname) || pattern.test(pathname)) {
-                    return {
-                        malicious: true,
-                        reason: `Suspicious pattern detected: ${pattern.source}`
-                    };
-                }
-            }
-            
-            // Check for suspicious IP addresses (but allow private/localhost)
-            if (hostname === 'localhost' || hostname.startsWith('127.') || hostname.startsWith('192.168.') || hostname.startsWith('10.')) {
-                return {
-                    malicious: false,
-                    reason: 'Local/private IP address'
-                };
-            }
-            
-            // Check for suspicious TLDs
-            const suspiciousTlds = ['.tk', '.ml', '.ga', '.cf', '.click', '.download'];
-            for (const tld of suspiciousTlds) {
-                if (hostname.endsWith(tld)) {
-                    return {
-                        malicious: true,
-                        reason: `Suspicious TLD detected: ${tld}`
-                    };
-                }
-            }
-            
-            return { malicious: false, reason: 'No suspicious patterns detected' };
-            
-        } catch (error) {
-            console.warn('Error in local URL detection:', error);
-            return { malicious: false, reason: 'URL parsing error' };
-        }
-    }
-
-    // Create blocking page HTML for content script
-    function createBlockingPageHtml(url, reason) {
-        return `
+    // ============================================
+    // PAGE BLOCKING FUNCTION
+    // ============================================
+    
+    function blockPage(url, reason) {
+        console.log('[Inspy] 🚫 BLOCKING PAGE:', url);
+        
+        // Create blocking page HTML
+        const blockingHtml = `
             <!DOCTYPE html>
             <html>
             <head>
-                <title>Inspy Security Extension - Site Blocked</title>
+                <title>Access Blocked - Inspy Security Extension</title>
                 <style>
                     body {
-                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
                         background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
                         margin: 0;
                         padding: 0;
@@ -517,7 +610,7 @@
                     <p class="warning-text">This website has been blocked by the Inspy Security Extension to protect you from potential threats.</p>
                     <div class="url">${url}</div>
                     <div class="reason">⚠️ ${reason}</div>
-                    <p class="warning-text">The site you're trying to visit has been flagged as potentially malicious by our security systems. This could include phishing attempts, malware distribution, or other security threats.</p>
+                    <p class="warning-text">The site has been flagged as potentially malicious by our security systems. This could include phishing attempts, malware distribution, or other security threats.</p>
                     <div class="buttons">
                         <button class="back-button" onclick="history.back()">← Go Back</button>
                         <button class="home-button" onclick="window.location.href='https://www.google.com'">🏠 Go to Google</button>
@@ -530,135 +623,198 @@
             </body>
             </html>
         `;
+        
+        // Replace the entire page content
+        document.documentElement.innerHTML = blockingHtml;
+        
+        // Prevent any further navigation
+        window.stop();
+        
+        console.log('[Inspy] ✅ Page blocked successfully');
     }
 
-    // NEW: URL reputation checking
-    function setupUrlReputationCheck() {
-        // Check URL reputation on page load
-        const currentUrl = window.location.href;
-        
-        
-        // Skip local files and chrome:// URLs
-        if (currentUrl.startsWith('file://') || currentUrl.startsWith('chrome://') || currentUrl.startsWith('chrome-extension://')) {
-            logEvent('normal', 'Page navigation');
-            return;
-        }
-        
-        const rateLimitKey = `reputation_${new URL(currentUrl).hostname}`;
-        
-        if (!SecurityRules.isRateLimited(rateLimitKey, 3, 3600000)) { // 3 requests per hour per domain
-            SecurityRules.checkUrlReputation(currentUrl).then(result => {
-                if (result && !result.error && result.malicious) {
+    // ============================================
+    // URL REPUTATION CHECKING
+    // ============================================
+    
+    async function checkUrlReputation(url) {
+        try {
+            console.log('[Inspy] 🔍 Checking URL reputation for:', url);
+            
+            const response = await fetch('http://localhost:8000/api/reputation', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ url: url })
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                console.log('[Inspy] 📊 URL reputation result:', result);
+                
+                if (result.malicious) {
+                    console.log('[Inspy] 🚫 Malicious URL detected - BLOCKING PAGE');
                     
-                    // Log the malicious detection
-                    logEvent('malicious', `url_reputation: score ${result.score || 'unknown'}`);
+                    // CRITICAL: Block the page by replacing content
+                    blockPage(url, result.reason);
                     
+                    showAlert(`🚫 Malicious URL: ${result.reason}`, 'danger');
+                    logEvent('malicious', `url_reputation: ${result.reason}`);
+                    
+                    // Send reputation log to backend
                     try {
-                        fetch('http://localhost:8000/api/logs', {
+                        await fetch('http://localhost:8000/api/logs', {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
                             body: JSON.stringify({
-                                url: currentUrl,
+                                url: url,
                                 timestamp: new Date().toISOString(),
                                 type: 'malicious',
-                                reason: `url_reputation_blocked: score ${result.score || 'unknown'}`
+                                reason: `url_reputation: ${result.reason}`,
+                                reputation_details: {
+                                    score: result.score,
+                                    sources: result.sources,
+                                    malicious_count: result.malicious_count
+                                }
                             })
                         });
                     } catch (err) {
-                        console.warn('[Inspy] Failed to log URL reputation block:', err);
+                        console.warn('[Inspy] Failed to log reputation event:', err);
                     }
-                    
-                    // BLOCK THE PAGE - Redirect to blocking page
-                    const reason = `Malicious site detected (Score: ${result.score || 'unknown'})`;
-                    const blockingPageHtml = createBlockingPageHtml(currentUrl, reason);
-                    document.documentElement.innerHTML = blockingPageHtml;
-                    
                 } else {
-                    // Log normal page load
-                    logEvent('normal', 'Page navigation');
+                    console.log('[Inspy] ✅ URL reputation: Safe');
                 }
-            }).catch(err => {
-                console.warn('[Inspy] URL reputation check failed:', err);
-                
-                // Fallback to local detection when API is blocked
-                const localResult = checkUrlLocally(currentUrl);
-                if (localResult.malicious) {
-                    logEvent('malicious', `local_detection: ${localResult.reason}`);
-                    
-                    // Block the page with local detection
-                    const reason = `Local detection: ${localResult.reason}`;
-                    const blockingPageHtml = createBlockingPageHtml(currentUrl, reason);
-                    document.documentElement.innerHTML = blockingPageHtml;
-                } else {
-                    logEvent('normal', 'Page navigation');
-                }
-            });
-        } else {
-            // Log normal page load if rate limited
-            logEvent('normal', 'Page navigation');
+            } else {
+                console.warn('[Inspy] URL reputation request failed:', response.status);
+            }
+        } catch (error) {
+            console.warn('[Inspy] URL reputation check failed:', error);
         }
     }
 
-    // NEW: JavaScript evasion scanning
-    function setupJsEvasionScanning() {
-        // Scan for suspicious JavaScript on page load
-        setTimeout(() => {
-            try {
-                const suspiciousScripts = SecurityRules.scanDocumentForJsEvasion();
-                if (suspiciousScripts.length > 0) {
-                    // Only log and warn for truly high-risk patterns
-                    suspiciousScripts.forEach(script => {
-                        logEvent('suspicious', `js_evasion: ${script.type} - ${script.reason}`);
-                    });
-                    
-                    // Show warning only for extremely suspicious patterns
-                    const extremeRiskScripts = suspiciousScripts.filter(s => 
-                        s.reason.includes('multiple eval calls') || s.reason.includes('extreme obfuscation')
-                    );
-                    
-                    if (extremeRiskScripts.length > 0) {
-                        showAlert(`⚠️ High Security Risk: Malicious JavaScript detected on this page`, 'danger');
+    // ============================================
+    // UEBA (User and Entity Behavior Analytics)
+    // ============================================
+    
+    async function performUebaAnalysis(url) {
+        try {
+            console.log('[Inspy] 🔍 Performing UEBA analysis for:', url);
+            
+            const response = await fetch('http://localhost:8000/api/ueba', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    url: url,
+                    user_behavior: {
+                        timestamp: new Date().toISOString(),
+                        user_agent: navigator.userAgent,
+                        referrer: document.referrer
                     }
+                })
+            });
+            
+            if (response.ok) {
+                const result = await response.json();
+                console.log('[Inspy] 📊 UEBA result:', result);
+                
+                if (result.malicious) {
+                    console.log('[Inspy] 🚫 UEBA detected malicious behavior - BLOCKING PAGE');
+                    
+                    // CRITICAL: Block the page by replacing content
+                    blockPage(url, result.reason);
+                    
+                    showAlert(`🚫 UEBA Alert: ${result.reason}`, 'danger');
+                    logEvent('malicious', `ueba_detection: ${result.reason}`);
+                    
+                    // Send UEBA log to backend
+                    try {
+                        await fetch('http://localhost:8000/api/logs', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                url: url,
+                                timestamp: new Date().toISOString(),
+                                type: 'malicious',
+                                reason: `ueba_detection: ${result.reason}`,
+                                ueba_details: {
+                                    anomaly_detected: result.anomaly_detected,
+                                    uninstall_predicted: result.uninstall_predicted,
+                                    risk_score: result.risk_score
+                                }
+                            })
+                        });
+                    } catch (err) {
+                        console.warn('[Inspy] Failed to log UEBA event:', err);
+                    }
+                } else {
+                    console.log('[Inspy] ✅ UEBA: Normal behavior detected');
                 }
-            } catch (err) {
-                console.error('[Inspy] Error in JS evasion scanning:', err);
+            } else {
+                console.warn('[Inspy] UEBA request failed:', response.status);
             }
-        }, 2000);
+        } catch (error) {
+            console.warn('[Inspy] UEBA analysis failed:', error);
+        }
+    }
+
+    // ============================================
+    // INITIALIZATION
+    // ============================================
+    
+    function initializeSecurityChecks() {
+        console.log('[Inspy] 🚀 Initializing security checks...');
+        
+        startMonitoring();
+        setupPasteMonitoring();
+        
+        // Perform URL reputation and UEBA analysis for current URL
+        const currentUrl = window.location.href;
+        checkUrlReputation(currentUrl);
+        performUebaAnalysis(currentUrl);
+        
+        console.log('[Inspy] ✅ Security checks initialized');
     }
 
     function startMonitoring() {
+        console.log('[Inspy] 📡 Starting file upload monitoring...');
         
+        // Listen for file input changes
         document.addEventListener('change', handleFileInput, true);
+        document.addEventListener('input', handleFileInput, true);
+        
+        // Listen for form submits
         document.addEventListener('submit', handleFormSubmit, true);
         
-        new MutationObserver((mutations) => {
+        // Monitor for dynamically added file inputs
+        const observer = new MutationObserver((mutations) => {
             for (let mutation of mutations) {
                 for (let node of mutation.addedNodes) {
                     if (node.nodeType === 1 && node.querySelectorAll) {
-                        node.querySelectorAll('input[type="file"]').forEach(input => {
-                            input.addEventListener('change', handleFileInput, true);
-                        });
+                        const fileInputs = node.querySelectorAll('input[type="file"]');
+                        if (fileInputs.length > 0) {
+                            console.log('[Inspy] 🔍 Found', fileInputs.length, 'new file inputs');
+                        }
                     }
                 }
             }
-        }).observe(document.documentElement, { childList: true, subtree: true });
+        });
         
-        // Send detection message
-        window.postMessage({
-            type: 'SECURITY_EXTENSION_DETECTED',
-            source: 'inspy-security-extension'
-        }, '*');
+        observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true
+        });
         
         logEvent('normal', 'Extension active');
+        console.log('[Inspy] ✅ Monitoring started');
     }
 
-    // Initialize security system
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', loadSecurityRules);
-    } else {
-        loadSecurityRules();
-    }
-
+    // ============================================
+    // MESSAGE LISTENER
+    // ============================================
+    
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.action === 'scanPage') {
             sendResponse({
@@ -669,9 +825,35 @@
                     extensionActive: true
                 }
             });
+        } else if (request.action === 'checkUrlAndBlock') {
+            // Handle URL checking and blocking from background script
+            (async () => {
+                try {
+                    const url = request.url;
+                    console.log('[Inspy] 🔍 Background requested URL check for:', url);
+                    
+                    // Check URL reputation
+                    await checkUrlReputation(url);
+                    
+                    // Perform UEBA analysis
+                    await performUebaAnalysis(url);
+                    
+                    sendResponse({ success: true });
+                } catch (error) {
+                    console.error('[Inspy] Error in URL check:', error);
+                    sendResponse({ success: false, error: error.message });
+                }
+            })();
+            return true; // Keep channel open for async response
         }
         return true;
     });
 
+    // Initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', loadSecurityRules);
+    } else {
+        loadSecurityRules();
+    }
 
 })();

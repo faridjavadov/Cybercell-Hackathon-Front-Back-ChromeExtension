@@ -11,13 +11,26 @@ import {
   DocumentArrowDownIcon,
 } from "@heroicons/react/24/outline";
 
-interface Log {
+interface ExtensionLog {
   id: number;
   url: string;
   timestamp: string;
   type: 'malicious' | 'normal' | 'suspicious';
   reason: string;
 }
+
+interface McpLog {
+  id: number;
+  timestamp: string;
+  level: string;
+  message: string;
+  command?: string;
+  tool?: string;
+  target?: string;
+  log_source: string;
+}
+
+type Log = ExtensionLog | McpLog;
 
 interface Stats {
   total_logs: number;
@@ -54,6 +67,7 @@ const Dashboard: React.FC = () => {
     normal_logs: 0,
     recent_logs: 0
   });
+  const [currentLogSource, setCurrentLogSource] = useState<string>("extension");
   const [pagination, setPagination] = useState<PaginationState>({
     page: 1,
     per_page: 20,
@@ -137,10 +151,10 @@ const Dashboard: React.FC = () => {
               
             case 'stats':
               setStats({
-                total_logs: data.total_logs,
-                malicious_logs: data.malicious_logs,
-                normal_logs: data.normal_logs,
-                recent_logs: data.recent_logs
+                total_logs: data.total_logs || 0,
+                malicious_logs: data.malicious_logs || 0,
+                normal_logs: data.normal_logs || 0,
+                recent_logs: data.recent_logs || 0
               });
               setLastUpdate(new Date());
               
@@ -150,14 +164,14 @@ const Dashboard: React.FC = () => {
               break;
               
             case 'logs':
-              setLogs(data.logs);
+              setLogs(data.logs || []);
               setPagination(prev => ({
                 ...prev,
-                page: data.pagination.page,
-                total: data.pagination.total,
-                total_pages: data.pagination.total_pages,
-                has_next: data.pagination.has_next,
-                has_prev: data.pagination.has_prev
+                page: data.pagination?.page || 1,
+                total: data.pagination?.total || 0,
+                total_pages: data.pagination?.total_pages || 1,
+                has_next: data.pagination?.has_next || false,
+                has_prev: data.pagination?.has_prev || false
               }));
               setLastUpdate(new Date());
               break;
@@ -189,22 +203,7 @@ const Dashboard: React.FC = () => {
     }
   }, [buildSSEUrl, pagination.page, filters]);
 
-  useEffect(() => {
-    connectSSE();
-    
-    return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-      }
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-    };
-  }, [connectSSE]);
-
-  const handlePageChange = useCallback((page: number) => {
-    setPagination(prev => ({ ...prev, page }));
-  }, []);
+ 
 
   const handleFiltersChange = useCallback((newFilters: Filters) => {
     setFilters(newFilters);
@@ -222,11 +221,82 @@ const Dashboard: React.FC = () => {
     setPagination(prev => ({ ...prev, page: 1 }));
   }, []);
 
+  const fetchMcpLogs = useCallback(async (page: number = 1) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/mcp-logs?page=${page}&per_page=${pagination.per_page}`);
+      if (response.ok) {
+        const data = await response.json();
+        setLogs(data.logs || []);
+        setPagination({
+          page: data.page || 1,
+          per_page: data.per_page || 20,
+          total: data.total || 0,
+          total_pages: data.total_pages || 1,
+          has_next: data.has_next || false,
+          has_prev: data.has_prev || false
+        });
+      }
+    } catch (error) {
+      console.error("Error fetching MCP logs:", error);
+      // Set empty logs on error to prevent undefined state
+      setLogs([]);
+    }
+  }, [pagination.per_page]);
+
+  useEffect(() => {
+    // Only connect SSE for extension logs
+    if (currentLogSource === "extension") {
+      connectSSE();
+    }
+    
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+    };
+  }, [connectSSE, currentLogSource]);
+
+  const handlePageChange = useCallback((page: number) => {
+    setPagination(prev => ({ ...prev, page }));
+    
+    if (currentLogSource === "mcp") {
+      fetchMcpLogs(page);
+    }
+    // For extension logs, the SSE will handle pagination automatically
+  }, [currentLogSource, fetchMcpLogs]);
+
+  const handleLogSourceChange = useCallback((source: string) => {
+    setCurrentLogSource(source);
+    setPagination(prev => ({ ...prev, page: 1 }));
+    
+    // Close existing SSE connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    
+    if (source === "mcp") {
+      fetchMcpLogs(1);
+    } else {
+      // For extension logs, the SSE will handle it
+      connectSSE();
+    }
+  }, [fetchMcpLogs, connectSSE]);
+
   const handleRefresh = useCallback(() => {
     setIsRefreshing(true);
-    connectSSE();
+    
+    if (currentLogSource === "extension") {
+      connectSSE();
+    } else {
+      fetchMcpLogs(pagination.page);
+    }
+    
     setTimeout(() => setIsRefreshing(false), 1000);
-  }, [connectSSE]);
+  }, [connectSSE, currentLogSource, fetchMcpLogs, pagination.page]);
 
   const getConnectionStatusVariant = (): "default" | "destructive" | "success" | "warning" => {
     switch (connectionStatus) {
@@ -342,6 +412,8 @@ const Dashboard: React.FC = () => {
         <LogsFilter
           onFiltersChange={handleFiltersChange}
           onClearFilters={handleClearFilters}
+          onLogSourceChange={handleLogSourceChange}
+          currentLogSource={currentLogSource}
         />
 
         {/* Logs Table */}
@@ -352,15 +424,18 @@ const Dashboard: React.FC = () => {
                 <div>
                   <CardTitle className="text-2xl font-bold tracking-tight flex items-center gap-3">
                     <span className={`w-2 h-2 rounded-full ${connectionStatus === 'connected' ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`}></span>
-                    Security Events
+                    {currentLogSource === "extension" ? "Extension Security Events" : "MCP Penetration Testing Events"}
                   </CardTitle>
                   <CardDescription className="text-base mt-2">
-                    Live monitoring of file uploads and security threats (Page {pagination.page} of {pagination.total_pages})
+                    {currentLogSource === "extension" 
+                      ? `Live monitoring of file uploads and security threats (Page ${pagination.page} of ${pagination.total_pages})`
+                      : `Penetration testing activities and tool usage (Page ${pagination.page} of ${pagination.total_pages})`
+                    }
                   </CardDescription>
                 </div>
                 <div className="flex items-center space-x-2">
                   <Badge variant="outline" className="text-xs">
-                    {pagination.total} total events
+                    {pagination.total} {currentLogSource === "extension" ? "extension" : "MCP"} events
                   </Badge>
                   <Button 
                     onClick={handleRefresh} 
@@ -378,7 +453,7 @@ const Dashboard: React.FC = () => {
               </div>
             </CardHeader>
             <CardContent className="p-0">
-              <LogTable logs={logs} />
+              <LogTable logs={logs} logSource={currentLogSource as 'extension' | 'mcp'} />
               <div className="px-6">
                 <LogsPagination
                   currentPage={pagination.page}
