@@ -15,17 +15,13 @@ import re
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
 Base.metadata.create_all(bind=engine)
 
-# Environment variables for API keys
-VT_API_KEY = os.getenv('VT_API_KEY')  # VirusTotal API key
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')  # Google Gemini API key
-ABUSEIPDB_API_KEY = os.getenv('ABUSEIPDB_API_KEY')  # AbuseIPDB API key
-
-# Pydantic models for new endpoints
+VT_API_KEY = os.getenv('VT_API_KEY')
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+ABUSEIPDB_API_KEY = os.getenv('ABUSEIPDB_API_KEY')
 class UrlReputationRequest(BaseModel):
     url: str
 
@@ -45,7 +41,6 @@ class GptClassificationResponse(BaseModel):
 
 app = FastAPI(title="Inspy Security Backend", version="1.0.0")
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -54,7 +49,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database models and endpoints (keeping existing ones)
 @app.get("/")
 async def root():
     return {"message": "Inspy Security Backend API", "version": "1.0.0"}
@@ -170,7 +164,6 @@ async def stream_logs(
                     # Get paginated logs (newest first)
                     logs = query.order_by(Log.timestamp.desc()).offset(offset).limit(per_page).all()
                     
-                    # Get stats (only for initial send or if changed)
                     if not initial_sent:
                         total_logs = db.query(Log).count()
                         malicious_logs = db.query(Log).filter(Log.type == 'malicious').count()
@@ -211,13 +204,11 @@ async def stream_logs(
                         "timestamp": datetime.utcnow().isoformat()
                     }
                     
-                    # Send logs data (always send on page change)
                     if last_logs_data != current_logs_data:
                         yield f"data: {json.dumps(current_logs_data)}\n\n"
                         last_logs_data = current_logs_data
                         initial_sent = True
                     
-                    # Send heartbeat if no changes
                     if last_logs_data == current_logs_data and initial_sent:
                         heartbeat = {
                             'type': 'heartbeat', 
@@ -228,19 +219,17 @@ async def stream_logs(
                 finally:
                     db.close()
                 
-                # Check every 10 seconds for updates
                 await asyncio.sleep(10)
                 
         except asyncio.CancelledError:
-            print("SSE connection closed by client")
+            pass  # Client disconnected
         except Exception as e:
             error_msg = {
                 'type': 'error', 
-                'message': str(e),
+                'message': 'Internal server error',
                 'timestamp': datetime.utcnow().isoformat()
             }
             yield f"data: {json.dumps(error_msg)}\n\n"
-            print(f"SSE error: {e}")
     
     return StreamingResponse(
         generate(),
@@ -271,7 +260,6 @@ async def get_filter_options(db: Session = Depends(get_db)):
             "reasons": [r[0] for r in reasons if r[0]]
         }
     except Exception as e:
-        print(f"Error fetching filter options: {e}")
         return {
             "log_types": [],
             "reasons": []
@@ -294,7 +282,6 @@ async def check_url_reputation(request: UrlReputationRequest):
                 error=True
             )
         
-        # Extract domain and IP for checking
         from urllib.parse import urlparse
         parsed_url = urlparse(url)
         domain = parsed_url.netloc
@@ -409,7 +396,6 @@ async def check_url_reputation(request: UrlReputationRequest):
             if is_malicious:
                 reputation_data['malicious'] = True
                 reputation_data['score'] = int(final_score)
-                print(f"Debug: URL flagged as malicious - VT: {vt_malicious}({vt_score}), AbuseIPDB: {abuse_malicious}({abuse_score})")
             
             return is_malicious, final_score
         
@@ -421,7 +407,6 @@ async def check_url_reputation(request: UrlReputationRequest):
             if not any(domain in url.lower() for domain in ['google.test', 'testing.google.test', 'malware.testing.google.test']):
                 malicious_patterns = ['malware', 'virus', 'trojan', 'phishing', 'scam', 'fake', 'malicious', 'suspicious']
                 if any(pattern in url.lower() for pattern in malicious_patterns):
-                    print(f"Debug: Local detection triggered for pattern in URL: {url}")
                     reputation_data['malicious'] = True
                     reputation_data['score'] = 80
                     reputation_data['sources']['local'] = 'Local pattern detection'
@@ -429,7 +414,6 @@ async def check_url_reputation(request: UrlReputationRequest):
         return UrlReputationResponse(**reputation_data)
         
     except Exception as e:
-        print(f"URL reputation check error: {e}")
         return UrlReputationResponse(
             malicious=False, 
             score=0, 
@@ -494,7 +478,6 @@ async def classify_content_with_gemini(request: GptClassificationRequest):
             )
             
     except Exception as e:
-        print(f"Gemini classification error: {e}")
         return GptClassificationResponse(
             label="error",
             reason=f"Classification failed: {str(e)}",

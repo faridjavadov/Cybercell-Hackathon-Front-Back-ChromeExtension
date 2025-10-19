@@ -11,7 +11,6 @@ import {
   DocumentArrowDownIcon,
 } from "@heroicons/react/24/outline";
 
-// Types
 interface Log {
   id: number;
   url: string;
@@ -48,7 +47,6 @@ type ConnectionStatus = "connecting" | "connected" | "error" | "disconnected";
 const API_BASE_URL = "http://localhost:8000";
 
 const Dashboard: React.FC = () => {
-  // State
   const [logs, setLogs] = useState<Log[]>([]);
   const [stats, setStats] = useState<Stats>({
     total_logs: 0,
@@ -75,12 +73,10 @@ const Dashboard: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [statsUpdated, setStatsUpdated] = useState(false);
 
-  // Refs
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<number | null>(null);
   const reconnectAttemptsRef = useRef(0);
 
-  // Build SSE URL
   const buildSSEUrl = useCallback((page: number, currentFilters: Filters): string => {
     const params = new URLSearchParams({
       page: page.toString(),
@@ -103,15 +99,12 @@ const Dashboard: React.FC = () => {
     return `${API_BASE_URL}/api/logs/stream?${params.toString()}`;
   }, [pagination.per_page]);
 
-  // Connect to SSE
   const connectSSE = useCallback(() => {
-    // Close existing connection
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
 
-    // Clear any pending reconnection
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
@@ -120,7 +113,6 @@ const Dashboard: React.FC = () => {
     try {
       setConnectionStatus("connecting");
       const sseUrl = buildSSEUrl(pagination.page, filters);
-      console.log("🔌 Connecting to SSE:", sseUrl);
 
       const eventSource = new EventSource(sseUrl);
       eventSourceRef.current = eventSource;
@@ -128,7 +120,6 @@ const Dashboard: React.FC = () => {
       eventSource.onopen = () => {
         setConnectionStatus("connected");
         reconnectAttemptsRef.current = 0;
-        console.log("✅ SSE connected");
       };
 
       eventSource.onmessage = (event) => {
@@ -141,7 +132,6 @@ const Dashboard: React.FC = () => {
               break;
               
             case 'error':
-              console.error("SSE Error:", data.message);
               setConnectionStatus("error");
               break;
               
@@ -170,8 +160,6 @@ const Dashboard: React.FC = () => {
                 has_prev: data.pagination.has_prev
               }));
               setLastUpdate(new Date());
-              
-              console.log(`📊 Page ${data.pagination.page}/${data.pagination.total_pages}: ${data.logs.length} logs`);
               break;
           }
         } catch (error) {
@@ -179,39 +167,28 @@ const Dashboard: React.FC = () => {
         }
       };
 
-      eventSource.onerror = (error) => {
-        console.error("SSE Error:", error);
-        
+      eventSource.onerror = () => {
         if (eventSource.readyState === EventSource.CLOSED) {
           setConnectionStatus("disconnected");
         } else {
           setConnectionStatus("error");
         }
 
-        // Attempt reconnection
         const maxAttempts = 5;
         if (reconnectAttemptsRef.current < maxAttempts) {
           reconnectAttemptsRef.current++;
           const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
-          
-          console.log(`⟳ Reconnecting in ${delay/1000}s (attempt ${reconnectAttemptsRef.current}/${maxAttempts})`);
-          
-          reconnectTimeoutRef.current = window.setTimeout(() => {
-            connectSSE();
-          }, delay);
+          reconnectTimeoutRef.current = window.setTimeout(connectSSE, delay);
         } else {
-          console.error("❌ Max reconnection attempts reached");
           setConnectionStatus("error");
         }
       };
 
     } catch (error) {
-      console.error("Failed to create SSE connection:", error);
       setConnectionStatus("error");
     }
   }, [buildSSEUrl, pagination.page, filters]);
 
-  // Initialize SSE connection
   useEffect(() => {
     connectSSE();
     
@@ -225,24 +202,16 @@ const Dashboard: React.FC = () => {
     };
   }, [connectSSE]);
 
-  // Handle page change
   const handlePageChange = useCallback((page: number) => {
-    console.log(`🔄 Changing to page ${page}`);
     setPagination(prev => ({ ...prev, page }));
-    // SSE will automatically reconnect with new page
   }, []);
 
-  // Handle filter change
   const handleFiltersChange = useCallback((newFilters: Filters) => {
-    console.log("🔍 Filters changed:", newFilters);
     setFilters(newFilters);
-    setPagination(prev => ({ ...prev, page: 1 })); // Reset to page 1
-    // SSE will automatically reconnect with new filters
+    setPagination(prev => ({ ...prev, page: 1 }));
   }, []);
 
-  // Handle clear filters
   const handleClearFilters = useCallback(() => {
-    console.log("🧹 Clearing filters");
     const clearedFilters: Filters = {
       log_type: "all",
       reason: "all",
@@ -251,18 +220,14 @@ const Dashboard: React.FC = () => {
     };
     setFilters(clearedFilters);
     setPagination(prev => ({ ...prev, page: 1 }));
-    // SSE will automatically reconnect
   }, []);
 
-  // Handle refresh
   const handleRefresh = useCallback(() => {
-    console.log("🔄 Refreshing data");
     setIsRefreshing(true);
-    connectSSE(); // Force reconnection
+    connectSSE();
     setTimeout(() => setIsRefreshing(false), 1000);
   }, [connectSSE]);
 
-  // Get connection status variant
   const getConnectionStatusVariant = (): "default" | "destructive" | "success" | "warning" => {
     switch (connectionStatus) {
       case "connected": return "success";
@@ -273,7 +238,6 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  // Get connection status text
   const getConnectionStatusText = (): string => {
     switch (connectionStatus) {
       case "connected": return "Live";

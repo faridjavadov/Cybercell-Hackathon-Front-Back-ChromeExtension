@@ -356,18 +356,15 @@ chrome.webRequest.onBeforeRequest.addListener(
                 return;
             }
             
-            console.log('[Inspy] Checking URL reputation for:', url);
             
             // Check URL reputation
             const reputation = await checkUrlReputation(url);
             
-            console.log('[Inspy] Reputation check result for', url, ':', reputation);
             
             if (reputation.malicious) {
                 // Block the navigation
                 const reason = `Malicious site detected (Score: ${reputation.score || 'unknown'})`;
                 
-                console.log('[Inspy] 🚫 BLOCKING malicious URL:', url, reason);
                 
                 // Add to blocked URLs set
                 blockedUrls.add(url);
@@ -388,12 +385,10 @@ chrome.webRequest.onBeforeRequest.addListener(
                 
             } else if (reputation.error) {
                 // If reputation check failed, use local fallback detection
-                console.log('[Inspy] Reputation check failed, using local detection for:', url);
                 const localResult = checkUrlLocally(url);
                 
                 if (localResult.malicious) {
                     const reason = `Local detection: ${localResult.reason}`;
-                    console.log('[Inspy] 🚫 BLOCKING URL via local detection:', url, reason);
                     
                     blockedUrls.add(url);
                     const log = {
@@ -418,7 +413,6 @@ chrome.webRequest.onBeforeRequest.addListener(
                 reason: 'Navigation request'
             };
             processSecurityLog(log);
-            console.log('[Inspy] ✅ Allowing navigation to:', url);
         }
     },
     { urls: ['<all_urls>'] },
@@ -438,7 +432,6 @@ chrome.webNavigation.onBeforeNavigate.addListener(
             
             // If URL is in blocked set, redirect to blocking page
             if (blockedUrls.has(url)) {
-                console.log('[Inspy] 🚫 Redirecting blocked URL:', url);
                 
                 // Redirect to blocking page
                 chrome.tabs.update(details.tabId, {

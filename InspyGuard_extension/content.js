@@ -4,7 +4,6 @@
 (function() {
     'use strict';
 
-    console.log('[Inspy] Content script loading...');
 
     // Load SecurityRules from external file (CSP-safe)
     let SecurityRules = null;
@@ -17,7 +16,6 @@
             script.src = chrome.runtime.getURL('utils/rules.js');
             script.onload = function() {
                 SecurityRules = window.SecurityRules;
-                console.log('[Inspy] SecurityRules loaded successfully');
                 initializeSecurityChecks();
             };
             script.onerror = function() {
@@ -31,7 +29,6 @@
         }
     }
     
-    // Fallback SecurityRules if external loading fails
     function loadFallbackSecurityRules() {
         SecurityRules = {
             MAX_FILE_SIZE: 10 * 1024 * 1024,
@@ -70,7 +67,6 @@
         initializeSecurityChecks();
     }
 
-    console.log('[Inspy] SecurityRules loaded in content script');
 
     // Inject SecurityRules into page using external script (CSP-safe)
     function injectSecurityRulesCSPSafe() {
@@ -78,7 +74,6 @@
         const script = document.createElement('script');
         script.src = chrome.runtime.getURL('inject.js');
         script.onload = function() {
-            console.log('[Inspy] ✅ inject.js loaded successfully');
             this.remove();
             
             // Verify injection worked
@@ -93,7 +88,6 @@
         };
         
         (document.head || document.documentElement).appendChild(script);
-        console.log('[Inspy] External script injected');
     }
 
     // Try injection
@@ -170,30 +164,25 @@
             reason: reason
         };
         
-        console.log('[Inspy] Security event:', log);
         
         try {
             chrome.runtime.sendMessage({ action: 'logSecurityEvent', log: log });
         } catch (e) {
-            console.log('[Inspy] Background not available:', e.message);
         }
     }
 
     function checkAndBlockFile(file) {
-        console.log('[Inspy] Checking file:', file.name, file.size);
         
         if (SecurityRules.isFileDangerous(file)) {
             const reason = SecurityRules.getBlockReason(file);
             const size = SecurityRules.formatFileSize(file.size);
             
-            console.log('[Inspy] 🚫 BLOCKED:', file.name, reason);
             showAlert(`Blocked: ${file.name} (${size})<br>${reason}`, 'danger');
             logEvent('malicious', `${reason}: ${file.name}`);
             
             return true;
         }
         
-        console.log('[Inspy] ✅ Allowed:', file.name);
         return false;
     }
 
@@ -203,7 +192,6 @@
             return;
         }
 
-        console.log('[Inspy] File input detected:', input.files.length, 'file(s)');
         
         let blocked = false;
         for (let file of input.files) {
@@ -242,7 +230,6 @@
 
     // NEW: Enhanced security monitoring functions
     function initializeSecurityChecks() {
-        console.log('[Inspy] Initializing enhanced security checks...');
         
         // Start basic monitoring
         startMonitoring();
@@ -252,7 +239,6 @@
         setupUrlReputationCheck();
         setupJsEvasionScanning();
         
-        console.log('[Inspy] ✅ Enhanced security checks initialized');
     }
 
     // NEW: Paste content monitoring
@@ -265,7 +251,6 @@
                 const text = clipboardData.getData('text');
                 if (!text || text.length < 10) return; // Skip very short text
                 
-                console.log('[Inspy] Paste detected, analyzing content...');
                 
                 // Check with regex patterns first (fast)
                 const regexHits = SecurityRules.checkPasteWithRegex(text);
@@ -275,7 +260,6 @@
                     showAlert(`🚫 Paste blocked: Sensitive data detected (${hitTypes})`, 'danger');
                     logEvent('malicious', `paste_regex: ${hitTypes}`);
                     
-                    // Send detailed log to backend
                     try {
                         await fetch('http://localhost:8000/api/logs', {
                             method: 'POST',
@@ -319,7 +303,6 @@
                     logEvent('suspicious', `paste_local: ${localResult.reason}`);
                 }
                 
-                console.log('[Inspy] ✅ Paste content approved');
                 
             } catch (err) {
                 console.error('[Inspy] Error in paste monitoring:', err);
@@ -327,7 +310,6 @@
         });
     }
 
-    // Local URL detection for fallback when API is unavailable
     function checkUrlLocally(url) {
         try {
             const urlObj = new URL(url);
@@ -336,7 +318,6 @@
             
             // Known malicious patterns
             const maliciousPatterns = [
-                // Common malware domains
                 /malware/i,
                 /virus/i,
                 /trojan/i,
@@ -363,7 +344,6 @@
                 /\/scam\//i,
                 /\/fake\//i,
                 
-                // Common malicious subdomains
                 /malware\./i,
                 /virus\./i,
                 /trojan\./i,
@@ -372,7 +352,6 @@
                 /fake\./i,
             ];
             
-            // Check hostname and pathname against patterns
             for (const pattern of maliciousPatterns) {
                 if (pattern.test(hostname) || pattern.test(pathname)) {
                     return {
@@ -544,11 +523,9 @@
         // Check URL reputation on page load
         const currentUrl = window.location.href;
         
-        console.log('[Inspy] Starting URL reputation check for:', currentUrl);
         
         // Skip local files and chrome:// URLs
         if (currentUrl.startsWith('file://') || currentUrl.startsWith('chrome://') || currentUrl.startsWith('chrome-extension://')) {
-            console.log('[Inspy] Skipping URL reputation check for local/system URL:', currentUrl);
             logEvent('normal', 'Page navigation');
             return;
         }
@@ -556,16 +533,12 @@
         const rateLimitKey = `reputation_${new URL(currentUrl).hostname}`;
         
         if (!SecurityRules.isRateLimited(rateLimitKey, 3, 3600000)) { // 3 requests per hour per domain
-            console.log('[Inspy] Rate limit OK, calling reputation API...');
             SecurityRules.checkUrlReputation(currentUrl).then(result => {
-                console.log('[Inspy] Reputation API response:', result);
                 if (result && !result.error && result.malicious) {
-                    console.log('[Inspy] 🚫 MALICIOUS SITE DETECTED - BLOCKING PAGE:', currentUrl, 'Score:', result.score);
                     
                     // Log the malicious detection
                     logEvent('malicious', `url_reputation: score ${result.score || 'unknown'}`);
                     
-                    // Send detailed log to backend
                     try {
                         fetch('http://localhost:8000/api/logs', {
                             method: 'POST',
@@ -592,12 +565,10 @@
                 }
             }).catch(err => {
                 console.warn('[Inspy] URL reputation check failed:', err);
-                console.log('[Inspy] API blocked, using local detection fallback');
                 
                 // Fallback to local detection when API is blocked
                 const localResult = checkUrlLocally(currentUrl);
                 if (localResult.malicious) {
-                    console.log('[Inspy] 🚫 LOCAL DETECTION: Malicious site detected:', currentUrl, localResult.reason);
                     logEvent('malicious', `local_detection: ${localResult.reason}`);
                     
                     // Block the page with local detection
@@ -605,7 +576,6 @@
                     const blockingPageHtml = createBlockingPageHtml(currentUrl, reason);
                     document.documentElement.innerHTML = blockingPageHtml;
                 } else {
-                    console.log('[Inspy] Local detection: Safe site');
                     logEvent('normal', 'Page navigation');
                 }
             });
@@ -641,11 +611,10 @@
             } catch (err) {
                 console.error('[Inspy] Error in JS evasion scanning:', err);
             }
-        }, 2000); // Wait 2 seconds for page to load
+        }, 2000);
     }
 
     function startMonitoring() {
-        console.log('[Inspy] Starting file monitoring...');
         
         document.addEventListener('change', handleFileInput, true);
         document.addEventListener('submit', handleFormSubmit, true);
@@ -669,7 +638,6 @@
         }, '*');
         
         logEvent('normal', 'Extension active');
-        console.log('[Inspy] ✅ Monitoring active');
     }
 
     // Initialize security system
@@ -693,6 +661,5 @@
         return true;
     });
 
-    console.log('[Inspy] ✅ Content script ready');
 
 })();
