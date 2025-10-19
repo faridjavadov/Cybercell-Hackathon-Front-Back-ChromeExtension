@@ -23,6 +23,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }
 
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
     function displayLogs() {
         if (securityLogs.length === 0) {
             logContainer.innerHTML = `
@@ -52,11 +58,16 @@ document.addEventListener('DOMContentLoaded', function() {
             const timestamp = new Date(log.timestamp).toLocaleTimeString();
             const reason = log.reason !== 'None' ? log.reason : '';
             
+            // Escape all user data to prevent XSS
+            const escapedUrl = escapeHtml(log.url);
+            const escapedReason = escapeHtml(reason);
+            const escapedType = escapeHtml(log.type.toUpperCase());
+            
             logEntry.innerHTML = `
-                <div class="log-type">${log.type.toUpperCase()}</div>
+                <div class="log-type">${escapedType}</div>
                 <div class="log-time">${timestamp}</div>
-                <div class="log-url" title="${log.url}">${log.url}</div>
-                ${reason ? `<div class="log-reason">${reason}</div>` : ''}
+                <div class="log-url" title="${escapedUrl}">${escapedUrl}</div>
+                ${reason ? `<div class="log-reason">${escapedReason}</div>` : ''}
             `;
             
             logContainer.appendChild(logEntry);

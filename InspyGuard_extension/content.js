@@ -491,8 +491,18 @@
         }, true); // Use capture phase
     }
     
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
     function blockPage(url, reason) {
         console.log('[Inspy] 🚫 BLOCKING PAGE:', url);
+        
+        // Escape URL and reason to prevent XSS
+        const escapedUrl = escapeHtml(url);
+        const escapedReason = escapeHtml(reason);
         
         // Create blocking page HTML
         const blockingHtml = `
@@ -606,8 +616,8 @@
                     <h1>ACCESS BLOCKED</h1>
                     <div class="extension-name">by Inspy Security Extension</div>
                     <p class="warning-text">This website has been blocked by the Inspy Security Extension to protect you from potential threats.</p>
-                    <div class="url">${url}</div>
-                    <div class="reason">⚠️ ${reason}</div>
+                    <div class="url">${escapedUrl}</div>
+                    <div class="reason">⚠️ ${escapedReason}</div>
                     <p class="warning-text">The site has been flagged as potentially malicious by our security systems. This could include phishing attempts, malware distribution, or other security threats.</p>
                     <div class="buttons">
                         <button class="back-button" onclick="history.back()">← Go Back</button>
@@ -701,8 +711,8 @@
                     url: url,
                     user_behavior: {
                         timestamp: new Date().toISOString(),
-                        user_agent: navigator.userAgent,
-                        referrer: document.referrer
+                        user_agent: navigator.userAgent ? navigator.userAgent.substring(0, 500) : '', // Limit length
+                        referrer: document.referrer ? document.referrer.substring(0, 500) : '' // Limit length
                     }
                 })
             });
@@ -711,14 +721,16 @@
                 const result = await response.json();
                 console.log('[Inspy] 📊 UEBA result:', result);
                 
-                if (result.malicious) {
+                // Check for UEBA anomaly detection (anomaly_flag = 1 means malicious)
+                if (result.anomaly_flag === 1 || (result.anomaly_score && result.anomaly_score > 0.8)) {
+                    const reason = `UEBA detected suspicious behavior (score: ${result.anomaly_score}, flag: ${result.anomaly_flag})`;
                     console.log('[Inspy] 🚫 UEBA detected malicious behavior - BLOCKING PAGE');
                     
                     // CRITICAL: Block the page by replacing content
-                    blockPage(url, result.reason);
+                    blockPage(url, reason);
                     
-                    showAlert(`🚫 UEBA Alert: ${result.reason}`, 'danger');
-                    logEvent('malicious', `ueba_detection: ${result.reason}`);
+                    showAlert(`🚫 UEBA Alert: ${reason}`, 'danger');
+                    logEvent('malicious', `ueba_detection: ${reason}`);
                     
                     // Send UEBA log to backend
                     try {
@@ -729,11 +741,13 @@
                                 url: url,
                                 timestamp: new Date().toISOString(),
                                 type: 'malicious',
-                                reason: `ueba_detection: ${result.reason}`,
+                                reason: `ueba_detection: ${reason}`,
                                 ueba_details: {
-                                    anomaly_detected: result.anomaly_detected,
-                                    uninstall_predicted: result.uninstall_predicted,
-                                    risk_score: result.risk_score
+                                    anomaly_score: result.anomaly_score,
+                                    anomaly_flag: result.anomaly_flag,
+                                    total_time_on_page: result.total_time_on_page,
+                                    avg_time_on_page: result.avg_time_on_page,
+                                    suspicious_count: result.suspicious_count
                                 }
                             })
                         });
@@ -741,7 +755,7 @@
                         console.warn('[Inspy] Failed to log UEBA event:', err);
                     }
                 } else {
-                    console.log('[Inspy] ✅ UEBA: Normal behavior detected');
+                    console.log('[Inspy] ✅ UEBA: Normal behavior detected (score:', result.anomaly_score, ', flag:', result.anomaly_flag, ')');
                 }
             } else {
                 console.warn('[Inspy] UEBA request failed:', response.status);

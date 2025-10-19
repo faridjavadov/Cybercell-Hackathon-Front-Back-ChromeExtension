@@ -143,6 +143,12 @@ function checkUrlLocally(url) {
 // BLOCKING PAGE HTML
 // ============================================
 
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 function createBlockingPageHtml(url, reason, blockType = 'url') {
     const icons = {
         url: '🚫',
@@ -157,6 +163,10 @@ function createBlockingPageHtml(url, reason, blockType = 'url') {
         paste: 'PASTE BLOCKED',
         content: 'CONTENT BLOCKED'
     };
+    
+    // Escape URL and reason to prevent XSS
+    const escapedUrl = escapeHtml(url);
+    const escapedReason = escapeHtml(reason);
     
     return `
         <!DOCTYPE html>
@@ -269,8 +279,8 @@ function createBlockingPageHtml(url, reason, blockType = 'url') {
                 <h1>${titles[blockType]}</h1>
                 <div class="extension-name">by Inspy Security Extension</div>
                 <p class="warning-text">This ${blockType === 'url' ? 'website' : 'action'} has been blocked by the Inspy Security Extension to protect you from potential threats.</p>
-                <div class="url">${url}</div>
-                <div class="reason">⚠️ ${reason}</div>
+                <div class="url">${escapedUrl}</div>
+                <div class="reason">⚠️ ${escapedReason}</div>
                 <p class="warning-text">The ${blockType === 'url' ? 'site' : 'content'} has been flagged as potentially malicious by our security systems. This could include phishing attempts, malware distribution, sensitive data leakage, or other security threats.</p>
                 <div class="buttons">
                     <button class="back-button" onclick="history.back()">← Go Back</button>
