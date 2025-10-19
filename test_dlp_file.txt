@@ -1,0 +1,11 @@
+This is a test file with sensitive data:
+
+API Key: sk-1234567890abcdef1234567890abcdef
+AWS Access Key: AKIA1234567890ABCDEF
+Private Key: -----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBAAKCAQEA1234567890abcdef
+-----END RSA PRIVATE KEY-----
+SSN: 123-45-6789
+Credit Card: 4111-1111-1111-1111
+
+This should be blocked by DLP scanning.

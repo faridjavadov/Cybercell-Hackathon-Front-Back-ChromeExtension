@@ -14,11 +14,13 @@
     
     function loadSecurityRules() {
         try {
-            if (typeof SecurityRules !== 'undefined') {
-                console.log('[Inspy] SecurityRules loaded successfully');
+            
+            if (typeof SecurityRules !== 'undefined' && SecurityRules !== null) {
+                initializeSecurityChecks();
+            } else if (typeof window.SecurityRules !== 'undefined' && window.SecurityRules !== null) {
+                SecurityRules = window.SecurityRules;
                 initializeSecurityChecks();
             } else {
-                console.error('[Inspy] SecurityRules not available, using fallback');
                 loadFallbackSecurityRules();
             }
         } catch (e) {
@@ -82,11 +84,15 @@
             },
             
             checkPasteWithRegex(text) {
+                console.log('[Inspy] 🔍 Fallback DLP: Checking regex patterns...');
+                console.log('[Inspy] 🔍 Fallback DLP: Available patterns:', Object.keys(this.PASTE_REGEXES));
+                
                 const hits = [];
                 for (const [k, rx] of Object.entries(this.PASTE_REGEXES)) {
                     if (rx instanceof RegExp && rx.test(text)) {
                         const matches = text.match(rx);
                         if (matches) {
+                            console.log('[Inspy] 🎯 Fallback DLP: Pattern matched:', k, 'Match:', matches[0]);
                             hits.push({
                                 type: k,
                                 snippet: matches[0].slice(0, 50),
@@ -95,6 +101,7 @@
                         }
                     }
                 }
+                console.log('[Inspy] 🔍 Fallback DLP: Total hits:', hits.length);
                 return hits;
             },
             
@@ -137,9 +144,12 @@
             },
             
             async isFileDangerousWithContent(file) {
+                console.log('[Inspy] 🔍 Fallback DLP: Checking file:', file.name);
+                
                 // Check basic properties first
                 const basicDanger = this.isFileDangerous(file);
                 if (basicDanger) {
+                    console.log('[Inspy] 🚫 Fallback DLP: Basic danger detected');
                     return {
                         dangerous: true,
                         blocked: true,
@@ -150,14 +160,23 @@
                 
                 // Check if it's a text file
                 const textExtensions = /\.(txt|json|xml|js|sh|bash|py|rb|php|csv|log|conf|config|env|ini|yaml|yml|sql|md)$/i;
-                if (!textExtensions.test(file.name)) {
+                const isTextFile = textExtensions.test(file.name);
+                console.log('[Inspy] 📄 Fallback DLP: Is text file?', isTextFile, 'File name:', file.name);
+                
+                if (!isTextFile) {
+                    console.log('[Inspy] ⏭️ Fallback DLP: Skipping non-text file');
                     return { dangerous: false, blocked: false, reason: 'Non-text file' };
                 }
                 
                 // Scan content
                 try {
+                    console.log('[Inspy] 📖 Fallback DLP: Reading file content...');
                     const content = await this.readFileAsText(file);
+                    console.log('[Inspy] 📖 Fallback DLP: Content length:', content.length);
+                    console.log('[Inspy] 📖 Fallback DLP: Content preview:', content.substring(0, 200));
+                    
                     const hits = this.checkPasteWithRegex(content);
+                    console.log('[Inspy] 🔍 Fallback DLP: Regex hits:', hits);
                     
                     if (hits.length > 0) {
                         const critical = hits.filter(h => h.severity === 'critical');
@@ -307,16 +326,13 @@
     // ============================================
     
     async function checkAndBlockFile(file) {
-        console.log('[Inspy] 🔍 Checking file:', file.name, SecurityRules.formatFileSize(file.size));
         
         if (!SecurityRules) {
-            console.error('[Inspy] ❌ SecurityRules not available!');
             return false;
         }
         
         // CRITICAL: Use isFileDangerousWithContent which returns blocked property
         const scanResult = await SecurityRules.isFileDangerousWithContent(file);
-        console.log('[Inspy] 📊 Scan result:', scanResult);
         
         // Check if file should be BLOCKED (same logic as file size)
         if (scanResult.blocked || scanResult.dangerous) {
@@ -335,11 +351,9 @@
             logEvent('malicious', `file_blocked: ${scanResult.reason} - ${file.name}`);
             sendDlpLogToBackend(file, scanResult);
             
-            console.log('[Inspy] 🚫 FILE BLOCKED - RETURNING TRUE');
             return true; // BLOCK the file
         }
         
-        console.log('[Inspy] ✅ File passed checks');
         return false; // Allow the file
     }
 
@@ -350,8 +364,6 @@
             return;
         }
 
-        console.log('[Inspy] 📁 File input event:', input.files.length, 'files');
-        
         let anyBlocked = false;
         const blockedFiles = [];
         
@@ -368,8 +380,6 @@
 
         // If ANY file is blocked, PREVENT the upload completely
         if (anyBlocked) {
-            console.log('[Inspy] 🚫 BLOCKING upload - blocked files:', blockedFiles);
-            
             // CRITICAL: Stop the event completely
             event.preventDefault();
             event.stopPropagation();
@@ -392,18 +402,14 @@
             // Re-attach listener to new input
             newInput.addEventListener('change', handleFileInput, true);
             
-            console.log('[Inspy] ✅ Upload blocked and input cleared');
             return false;
         }
         
-        console.log('[Inspy] ✅ All files passed checks');
     }
 
     async function handleFormSubmit(event) {
         const form = event.target;
         const fileInputs = form.querySelectorAll('input[type="file"]');
-        
-        console.log('[Inspy] 📝 Form submit - checking', fileInputs.length, 'file inputs');
         
         for (let input of fileInputs) {
             if (input.files && input.files.length > 0) {
@@ -440,15 +446,11 @@
                 const text = clipboardData.getData('text');
                 if (!text || text.length < 10) return;
                 
-                console.log('[Inspy] 📋 Paste detected, scanning...');
-                
                 // Use classifyPasteLocally which returns blocked property
                 const result = SecurityRules.classifyPasteLocally(text);
-                console.log('[Inspy] 📊 Paste scan result:', result);
                 
                 // Check blocked property (same as file content)
                 if (result.blocked) {
-                    console.log('[Inspy] 🚫 BLOCKING paste');
                     
                     e.preventDefault();
                     e.stopPropagation();
@@ -488,10 +490,6 @@
             }
         }, true); // Use capture phase
     }
-
-    // ============================================
-    // PAGE BLOCKING FUNCTION
-    // ============================================
     
     function blockPage(url, reason) {
         console.log('[Inspy] 🚫 BLOCKING PAGE:', url);
@@ -633,9 +631,6 @@
         console.log('[Inspy] ✅ Page blocked successfully');
     }
 
-    // ============================================
-    // URL REPUTATION CHECKING
-    // ============================================
     
     async function checkUrlReputation(url) {
         try {
@@ -692,10 +687,6 @@
             console.warn('[Inspy] URL reputation check failed:', error);
         }
     }
-
-    // ============================================
-    // UEBA (User and Entity Behavior Analytics)
-    // ============================================
     
     async function performUebaAnalysis(url) {
         try {
@@ -760,9 +751,6 @@
         }
     }
 
-    // ============================================
-    // INITIALIZATION
-    // ============================================
     
     function initializeSecurityChecks() {
         console.log('[Inspy] 🚀 Initializing security checks...');
@@ -811,10 +799,7 @@
         console.log('[Inspy] ✅ Monitoring started');
     }
 
-    // ============================================
-    // MESSAGE LISTENER
-    // ============================================
-    
+
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.action === 'scanPage') {
             sendResponse({
