@@ -1,0 +1,1 @@
+"{\n  \"session_id\": \"session_6093\",\n  \"user_id\": \"ca4e9232c833a449\",\n  \"anomaly_flag\": 0,\n  \"anomaly_score\": 0.04877899904901517,\n  \"unique_domains\": 3,\n  \"unique_event_types\": 3,\n  \"suspicious_count\": 1,\n  \"avg_time_on_page\": 5.666666666666667,\n  \"total_time_on_page\": 17.0,\n  \"max_time_on_page\": 10.0\n}"
