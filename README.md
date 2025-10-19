@@ -293,7 +293,7 @@ curl http://localhost:8001/health
 # Test with sample data
 curl -X POST http://localhost:8000/api/reputation \
   -H "Content-Type: application/json" \
-  -d '{"url": "http://malware.testing.google.test"}'
+  -d '{"url": "https://grandpashabet7003.com/"}'
 ```
 
 ### Extension Testing

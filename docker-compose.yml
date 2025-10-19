@@ -13,7 +13,7 @@ services:
       - ./backend/logs.db:/app/logs.db
     environment:
       - PYTHONUNBUFFERED=1
-      - MALICIOUS_URL=https://malicious-test-site.com
+      - MALICIOUS_URL=https://grandpashabet7003.com/
     depends_on:
       - ai-ueba
     restart: unless-stopped

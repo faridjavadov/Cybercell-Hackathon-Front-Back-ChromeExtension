@@ -556,9 +556,9 @@ async def analyze_user_behavior(request: UebaRequest):
     try:
         url = request.url.lower()
         
-        # Check for specific malicious URL
-        malicious_url = os.getenv("MALICIOUS_URL", "https://malicious-test-site.com")
-        if malicious_url.lower() in url:
+        malicious_url = os.getenv("MALICIOUS_URL")
+        malicious_domain = malicious_url.lower().replace('https://', '').replace('http://', '').rstrip('/')
+        if malicious_domain in url or url.startswith(malicious_url.lower()):
             return UebaResponse(
                 total_time_on_page=120.0,
                 avg_time_on_page=60.0,
