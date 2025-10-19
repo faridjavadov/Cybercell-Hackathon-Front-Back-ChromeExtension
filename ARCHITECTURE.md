@@ -107,44 +107,101 @@ InspyGuard is a multi-layered security platform consisting of:
 - **Filtering**: Real-time filter application
 - **Export**: CSV/JSON export functionality
 
-## Data Flow Architecture
+## System Architecture Overview
 
+```mermaid
+graph TB
+    subgraph "Browser Layer"
+        EXT[Chrome Extension<br/>Real-time Protection]
+        DASH[Security Dashboard<br/>Port 3000]
+    end
+    
+    subgraph "Backend Services"
+        API[FastAPI Backend<br/>Port 8000<br/>Security Operations]
+        AI[AI UEBA Service<br/>Port 8001<br/>ML Analytics]
+        DB[(SQLite Database<br/>Logs & Analytics)]
+    end
+    
+    subgraph "External APIs"
+        VT[VirusTotal API<br/>URL Reputation]
+        GEM[Google Gemini API<br/>Content Analysis]
+        ABUSE[AbuseIPDB API<br/>IP Reputation]
+    end
+    
+    EXT -->|POST /api/reputation<br/>POST /api/ueba| API
+    DASH -->|GET /api/logs/stream<br/>GET /api/logs/stats| API
+    API -->|POST /analyze| AI
+    API -->|Query Logs| DB
+    API -->|Check URL| VT
+    API -->|Classify Content| GEM
+    API -->|Check IP| ABUSE
+    AI -->|Store Results| DB
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Chrome        │    │   Frontend      │    │   External      │
-│   Extension     │    │   Dashboard     │    │   APIs          │
-└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
-          │                      │                      │
-          │ POST /api/logs       │ GET /api/logs/stream │
-          │ POST /api/reputation │ GET /api/logs/stats  │
-          │                      │                      │
-          ▼                      ▼                      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Backend API (Port 8000)                     │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
-│  │ URL Rep     │  │ Content     │  │ Log Mgmt    │            │
-│  │ Endpoints   │  │ Analysis    │  │ Endpoints   │            │
-│  └─────────────┘  └─────────────┘  └─────────────┘            │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-                          │ POST /analyze
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                 AI UEBA Service (Port 8001)                    │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
-│  │ Behavior    │  │ Anomaly     │  │ Risk        │            │
-│  │ Analysis    │  │ Detection   │  │ Scoring     │            │
-│  └─────────────┘  └─────────────┘  └─────────────┘            │
-└─────────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    SQLite Database                              │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐            │
-│  │ logs        │  │ mcp_logs    │  │ sessions    │            │
-│  │ table       │  │ table       │  │ table       │            │
-│  └─────────────┘  └─────────────┘  └─────────────┘            │
-└─────────────────────────────────────────────────────────────────┘
+
+## Detailed Data Flow Architecture
+
+```mermaid
+graph LR
+    subgraph "Client Layer"
+        CE[Chrome Extension]
+        FD[Frontend Dashboard]
+    end
+    
+    subgraph "API Gateway"
+        API[Backend API<br/>Port 8000]
+    end
+    
+    subgraph "Core Services"
+        AI[AI UEBA Service<br/>Port 8001]
+        DB[(SQLite Database)]
+    end
+    
+    subgraph "External Services"
+        VT[VirusTotal]
+        GEM[Google Gemini]
+        ABUSE[AbuseIPDB]
+    end
+    
+    CE -->|1. Security Requests| API
+    FD -->|2. Dashboard Data| API
+    API -->|3. ML Analysis| AI
+    API -->|4. Data Storage| DB
+    API -->|5. URL Check| VT
+    API -->|6. Content Analysis| GEM
+    API -->|7. IP Check| ABUSE
+    AI -->|8. Results| DB
+    API -->|9. Responses| CE
+    API -->|10. Real-time Data| FD
+```
+
+## Service Communication Flow
+
+```mermaid
+sequenceDiagram
+    participant CE as Chrome Extension
+    participant API as Backend API
+    participant AI as AI UEBA Service
+    participant DB as Database
+    participant VT as VirusTotal
+    participant ABUSE as AbuseIPDB
+    
+    Note over CE,ABUSE: URL Reputation Check Flow
+    CE->>API: POST /api/reputation
+    API->>VT: Check URL reputation
+    VT-->>API: Reputation data
+    API->>ABUSE: Check IP reputation
+    ABUSE-->>API: IP data
+    API->>DB: Store security event
+    API-->>CE: Security assessment
+    
+    Note over CE,DB: UEBA Analysis Flow
+    CE->>API: POST /api/ueba
+    API->>DB: Get recent user logs
+    DB-->>API: Activity data
+    API->>AI: POST /analyze
+    AI-->>API: ML analysis results
+    API->>DB: Store analytics
+    API-->>CE: Behavioral insights
 ```
 
 ## API Request/Response Flow
@@ -305,21 +362,83 @@ CREATE TABLE mcp_logs (
 ## Deployment Architecture
 
 ### Development Environment
-```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Chrome        │    │   React Dev     │    │   Python        │
-│   Extension     │    │   Server        │    │   Services      │
-│   (Local)       │    │   :3000         │    │   :8000, :8001  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+
+```mermaid
+graph TB
+    subgraph "Local Development"
+        CE[Chrome Extension<br/>Local Browser]
+        FD[React Dev Server<br/>Port 3000]
+        API[Python Backend<br/>Port 8000]
+        AI[AI Service<br/>Port 8001]
+        DB[(SQLite DB<br/>Local File)]
+    end
+    
+    CE -->|HTTP Requests| API
+    FD -->|HTTP Requests| API
+    API -->|HTTP Requests| AI
+    API -->|SQL Queries| DB
 ```
 
 ### Production Environment
+
+```mermaid
+graph TB
+    subgraph "Production Deployment"
+        subgraph "Load Balancer"
+            NGINX[Nginx<br/>Port 80/443<br/>SSL Termination]
+        end
+        
+        subgraph "Docker Containers"
+            API_CONTAINER[Backend API<br/>Port 8000<br/>FastAPI]
+            AI_CONTAINER[AI UEBA Service<br/>Port 8001<br/>ML Analytics]
+            FRONTEND_CONTAINER[Frontend<br/>Port 3000<br/>React]
+        end
+        
+        subgraph "Data Layer"
+            DB_CONTAINER[(SQLite Database<br/>Persistent Volume)]
+        end
+        
+        subgraph "External Services"
+            VT_API[VirusTotal API]
+            GEM_API[Google Gemini API]
+            ABUSE_API[AbuseIPDB API]
+        end
+    end
+    
+    NGINX -->|Route Traffic| API_CONTAINER
+    NGINX -->|Serve Static| FRONTEND_CONTAINER
+    API_CONTAINER -->|ML Analysis| AI_CONTAINER
+    API_CONTAINER -->|Data Storage| DB_CONTAINER
+    API_CONTAINER -->|Security Checks| VT_API
+    API_CONTAINER -->|Content Analysis| GEM_API
+    API_CONTAINER -->|IP Reputation| ABUSE_API
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Nginx         │    │   Docker        │    │   External      │
-│   Load Balancer │    │   Containers    │    │   APIs          │
-│   :80, :443     │    │   :8000, :8001  │    │   VirusTotal    │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
+
+### Docker Services Architecture
+
+```mermaid
+graph LR
+    subgraph "Docker Compose Services"
+        subgraph "Web Services"
+            BACKEND[backend<br/>FastAPI<br/>Port 8000]
+            FRONTEND[frontend<br/>React<br/>Port 3000]
+            AI_UEBA[ai-ueba<br/>ML Service<br/>Port 8001]
+        end
+        
+        subgraph "Infrastructure"
+            NGINX[nginx<br/>Reverse Proxy<br/>Port 80]
+        end
+        
+        subgraph "Data"
+            VOLUMES[Volumes<br/>logs.db<br/>nginx.conf]
+        end
+    end
+    
+    NGINX -->|Proxy| BACKEND
+    NGINX -->|Serve| FRONTEND
+    BACKEND -->|Analyze| AI_UEBA
+    BACKEND -->|Store| VOLUMES
+    AI_UEBA -->|Models| VOLUMES
 ```
 
 ### Docker Services

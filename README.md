@@ -49,32 +49,59 @@ A comprehensive security platform providing real-time protection against malicio
 
 ## 🏗️ Architecture
 
+### System Overview
+
 ```mermaid
 graph TB
-    subgraph "Browser"
-        EXT[Chrome Extension]
-        DASH[Security Dashboard]
+    subgraph "Browser Layer"
+        EXT[Chrome Extension<br/>Real-time Protection]
+        DASH[Security Dashboard<br/>Port 3000]
     end
     
     subgraph "Backend Services"
-        API[FastAPI Backend<br/>Port 8000]
-        AI[AI UEBA Service<br/>Port 8001]
-        DB[(SQLite Database)]
+        API[FastAPI Backend<br/>Port 8000<br/>Security Operations]
+        AI[AI UEBA Service<br/>Port 8001<br/>ML Analytics]
+        DB[(SQLite Database<br/>Logs & Analytics)]
     end
     
     subgraph "External APIs"
-        VT[VirusTotal API]
-        GEM[Google Gemini API]
-        ABUSE[AbuseIPDB API]
+        VT[VirusTotal API<br/>URL Reputation]
+        GEM[Google Gemini API<br/>Content Analysis]
+        ABUSE[AbuseIPDB API<br/>IP Reputation]
     end
     
-    EXT --> API
-    DASH --> API
-    API --> AI
-    API --> DB
-    API --> VT
-    API --> GEM
-    API --> ABUSE
+    EXT -->|POST /api/reputation<br/>POST /api/ueba| API
+    DASH -->|GET /api/logs/stream<br/>GET /api/logs/stats| API
+    API -->|POST /analyze| AI
+    API -->|Query Logs| DB
+    API -->|Check URL| VT
+    API -->|Classify Content| GEM
+    API -->|Check IP| ABUSE
+    AI -->|Store Results| DB
+```
+
+### Data Flow Architecture
+
+```mermaid
+sequenceDiagram
+    participant CE as Chrome Extension
+    participant API as Backend API
+    participant AI as AI UEBA Service
+    participant DB as Database
+    participant EXT as External APIs
+    
+    CE->>API: POST /api/reputation
+    API->>EXT: Check URL with VirusTotal
+    API->>EXT: Check IP with AbuseIPDB
+    EXT-->>API: Reputation Data
+    API-->>CE: Security Assessment
+    
+    CE->>API: POST /api/ueba
+    API->>DB: Get Recent Logs
+    DB-->>API: User Activity Data
+    API->>AI: POST /analyze
+    AI-->>API: ML Analysis Results
+    API-->>CE: Behavioral Analytics
 ```
 
 ### **Service Components**
