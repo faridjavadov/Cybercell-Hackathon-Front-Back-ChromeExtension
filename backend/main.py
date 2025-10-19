@@ -17,7 +17,6 @@ import logging
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -333,7 +332,6 @@ async def check_url_reputation(request: UrlReputationRequest):
         parsed_url = urlparse(url)
         domain = parsed_url.netloc
         
-        # Skip localhost, local IPs, and trusted domains
         trustedDomains = [
             'instagram.com', 'facebook.com', 'twitter.com', 'x.com', 'linkedin.com',
             'google.com', 'youtube.com', 'github.com', 'stackoverflow.com',
@@ -461,7 +459,6 @@ async def check_url_reputation(request: UrlReputationRequest):
         
         # Local detection fallback (only if no API detection)
         if not reputation_data.get('malicious', False):
-            # Skip local detection for trusted domains
             if not any(trusted in url.lower() for trusted in trustedDomains):
                 if not any(domain in url.lower() for domain in ['google.test', 'testing.google.test', 'malware.testing.google.test']):
                     malicious_patterns = ['malware', 'virus', 'trojan', 'phishing', 'scam', 'fake', 'malicious', 'suspicious']
@@ -570,15 +567,12 @@ async def analyze_user_behavior(request: UebaRequest):
                 suspicious_count=5
             )
         
-        # Get recent logs for this user/session for AI analysis
         recent_logs = await get_recent_logs_for_ueba(url)
         
         if recent_logs:
-            # Call AI UEBA service for all URLs
             ai_result = await call_ai_ueba_service(recent_logs)
             
             if ai_result:
-                # Extract main fields from AI result
                 total_time_on_page = ai_result.get('total_time_on_page', 0.0)
                 avg_time_on_page = ai_result.get('avg_time_on_page', 0.0)
                 anomaly_score = ai_result.get('anomaly_score', 0.0)
@@ -601,7 +595,6 @@ async def analyze_user_behavior(request: UebaRequest):
                     suspicious_count=suspicious_count
                 )
             else:
-                # AI service failed, return realistic fallback values
                 return UebaResponse(
                     total_time_on_page=30.0,
                     avg_time_on_page=10.0,
@@ -610,7 +603,6 @@ async def analyze_user_behavior(request: UebaRequest):
                     suspicious_count=0
                 )
         else:
-            # No recent logs available, return realistic default values
             return UebaResponse(
                 total_time_on_page=25.0,
                 avg_time_on_page=8.5,
@@ -638,7 +630,6 @@ async def get_recent_logs_for_ueba(url: str, limit: int = 10) -> List[dict]:
         # Get recent logs from the database for UEBA analysis
         recent_logs = db.query(Log).order_by(Log.timestamp.desc()).limit(limit).all()
         
-        # Convert to dict format expected by AI service
         logs_data = []
         for log in recent_logs:
             logs_data.append({
@@ -668,12 +659,10 @@ async def call_ai_ueba_service(logs: List[dict]) -> dict:
     try:
         import httpx
         
-        # Prepare request for AI service
         ai_request = {
             "logs": logs
         }
         
-        # Call AI service - try Docker service name first, then localhost for development
         ai_service_urls = [
             "http://ai-ueba:8001/analyze",  # Docker service name
             "http://localhost:8001/analyze"  # Local development
@@ -693,7 +682,6 @@ async def call_ai_ueba_service(logs: List[dict]) -> dict:
         if response and response.status_code == 200:
             ai_data = response.json()
             
-            # Map AI service response to our required fields
             session_duration_ms = ai_data.get('session_duration_ms', 0.0)
             num_events = ai_data.get('num_events', 0)
             error_rate = ai_data.get('error_rate', 0.0)
